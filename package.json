@@ -1,6 +1,6 @@
 {
-  "name": "factorium",
-  "version": "1.0.6",
+  "name": "factorium-protocol",
+  "version": "1.0.7",
   "description": "Factorium — Attestation Marketplace Protocol. Decentralized marketplace where AI systems buy and sell verified attestations to eliminate redundant compute.",
   "license": "MIT",
   "author": "Factorium",
