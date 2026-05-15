@@ -1,27 +1,32 @@
 {
-  "name": "ai2ai-assertion-marketplace",
+  "name": "factorium",
   "version": "1.0.6",
-  "description": "AI-to-AI Assertion Marketplace — buy and sell verified attestations between AI agents to eliminate redundant compute",
+  "description": "Factorium — Attestation Marketplace Protocol. Decentralized marketplace where AI systems buy and sell verified attestations to eliminate redundant compute.",
   "license": "MIT",
-  "author": "Colby Eggleston",
+  "author": "Factorium",
   "keywords": [
-    "ai",
-    "agent",
+    "factorium",
     "attestation",
     "verification",
     "marketplace",
+    "ai",
+    "agent",
+    "lightning",
+    "bitcoin",
     "mcp",
     "model-context-protocol",
     "deepfake-detection",
     "identity-verification",
     "fact-check",
     "decentralized",
-    "compute-efficiency"
+    "compute-efficiency",
+    "protocol"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Colbster143/ai2ai-assertion-marketplace"
+    "url": "https://github.com/FactoriumNetwork/factorium"
   },
+  "homepage": "https://factorium.network",
   "main": "dist/src/start.js",
   "types": "dist/index.d.ts",
   "type": "module",

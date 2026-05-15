@@ -19,9 +19,9 @@ import { v4 as uuid } from 'uuid';
 const program = new Command();
 
 program
-  .name('ai2ai')
-  .description('AI2AI Assertion Marketplace CLI')
-  .version('1.0.0');
+  .name('factorium')
+  .description('Factorium — Attestation Marketplace Protocol CLI')
+  .version('1.0.6');
 
 // --- Database ---
 

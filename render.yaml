@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ai2ai-marketplace
+    name: factorium
     env: node
     buildCommand: npm run render-build
     startCommand: node dist/src/start.js

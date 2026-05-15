@@ -312,7 +312,7 @@ const TOOLS: Tool[] = [
 
 export async function startMCPServer(): Promise<void> {
   const server = new Server(
-    { name: 'ai2ai-assertion-marketplace', version: '1.0.0' },
+    { name: 'factorium-attestation-marketplace', version: '1.0.6' },
     { capabilities: { tools: {} } }
   );
 
