@@ -2,8 +2,9 @@ import type { LightningInvoice } from './types.js';
 import { LNBitsClient } from './lnbits.js';
 import { OpenNodeClient } from './opennode.js';
 import { AlbyClient } from './alby.js';
+import { ZBDClient } from './zbd.js';
 
-export type PaymentProvider = 'lnbits' | 'opennode' | 'alby';
+export type PaymentProvider = 'lnbits' | 'opennode' | 'alby' | 'zbd';
 
 interface LightningClient {
   createInvoice(amount: number, memo: string, expirySeconds?: number): Promise<LightningInvoice>;
@@ -20,7 +21,11 @@ export function getLightningClient(): LightningClient {
   if (!client) {
     provider = detectProvider();
 
-    if (provider === 'alby') {
+    if (provider === 'zbd') {
+      const apiKey = process.env.ZBD_API_KEY || '';
+      if (!apiKey) throw new Error('ZBD_API_KEY not set');
+      client = new ZBDAdapter(new ZBDClient(apiKey));
+    } else if (provider === 'alby') {
       const accessToken = process.env.ALBY_ACCESS_TOKEN || '';
       if (!accessToken) throw new Error('ALBY_ACCESS_TOKEN not set');
       client = new AlbyAdapter(new AlbyClient(accessToken));
@@ -39,13 +44,14 @@ export function getLightningClient(): LightningClient {
 }
 
 function detectProvider(): PaymentProvider {
+  if (process.env.ZBD_API_KEY) return 'zbd';
   if (process.env.ALBY_ACCESS_TOKEN) return 'alby';
   if (process.env.OPENNODE_API_KEY) return 'opennode';
   return 'lnbits';
 }
 
 export function isLightningConfigured(): boolean {
-  return !!(process.env.ALBY_ACCESS_TOKEN || process.env.OPENNODE_API_KEY || process.env.LNBITS_ADMIN_KEY || process.env.LNBITS_API_KEY);
+  return !!(process.env.ZBD_API_KEY || process.env.ALBY_ACCESS_TOKEN || process.env.OPENNODE_API_KEY || process.env.LNBITS_ADMIN_KEY || process.env.LNBITS_API_KEY);
 }
 
 export function getPaymentProvider(): PaymentProvider | null {
@@ -59,6 +65,18 @@ class AlbyAdapter implements LightningClient {
   async payInvoice(paymentRequest: string, amount: number, description: string) { return this.alby.payInvoice(paymentRequest, amount, description); }
   async decodeInvoice(paymentRequest: string) { return this.alby.decodeInvoice(paymentRequest); }
   async getBalance() { return this.alby.getBalance(); }
+}
+
+class ZBDAdapter implements LightningClient {
+  constructor(private zbd: ZBDClient) {}
+  async createInvoice(amount: number, memo: string, expirySeconds?: number) { return this.zbd.createInvoice(amount, memo, expirySeconds); }
+  async checkInvoice(paymentHash: string) { return this.zbd.checkInvoice(paymentHash); }
+  async payInvoice(paymentRequest: string, amount: number, description: string) { return this.zbd.payInvoice(paymentRequest, amount, description); }
+  async decodeInvoice(paymentRequest: string) {
+    const r = await this.zbd.decodeInvoice(paymentRequest);
+    return { amount: r.amount, description: r.memo };
+  }
+  async getBalance() { return this.zbd.getBalance(); }
 }
 
 class OpenNodeAdapter implements LightningClient {
