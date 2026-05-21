@@ -1,0 +1,7 @@
+FROM lnbits/lnbits:latest
+ENV LNBITS_BACKEND_WALLET_CLASS=FakeWallet
+ENV LNBITS_ADMIN_UI=true
+ENV LNBITS_SITE_TITLE="Factorium Lightning"
+ENV HOST=0.0.0.0
+ENV PORT=5000
+ENV LNBITS_ADMIN_KEY=factorium_lnbits_admin_key_change_me
