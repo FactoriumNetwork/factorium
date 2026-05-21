@@ -9,15 +9,7 @@ services:
         value: "10000"
       - key: NODE_VERSION
         value: "22.0.0"
-      - key: LNBITS_URL
-        value: "https://factorium-lnbits.onrender.com"
-      - key: LNBITS_ADMIN_KEY
-        value: "factorium_lnbits_admin_key_change_me"
-
-  - type: web
-    name: factorium-lnbits
-    env: docker
-    dockerfilePath: ./Dockerfile.lnbits
-    envVars:
-      - key: PORT
-        value: "5000"
+      - key: ALBY_HUB_URL
+        value: "https://owen-player-project-condo.trycloudflare.com/api"
+      - key: ALBY_ACCESS_TOKEN
+        sync: false
