@@ -54,6 +54,9 @@ import {
 } from '../bounties/bounty-market.js';
 import { generateApiKey, validateApiKey } from '../auth/keys.js';
 import { renderLanding, renderDashboard, renderLogin } from '../dashboard/html.js';
+import { getOrCreateMCPServer, createMCPHttpTransport, createAndConnectMCPTransport } from '../mcp/server.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 const OPENAPI_SPEC = {
   openapi: '3.0.3',
@@ -200,7 +203,59 @@ export function createAPI(): express.Express {
   });
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', protocol: 'factorium', version: '1.0.7' });
+    res.json({ status: 'ok', protocol: 'factorium', version: '1.0.7', mcp: '/mcp' });
+  });
+
+  // --- MCP Server (AI agent interface) ---
+
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  app.post('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    try {
+      let transport: StreamableHTTPServerTransport;
+
+      if (sessionId && transports.has(sessionId)) {
+        transport = transports.get(sessionId)!;
+      } else if (!sessionId && isInitializeRequest(req.body)) {
+        transport = createMCPHttpTransport();
+        transport.onclose = () => {
+          const sid = transport.sessionId;
+          if (sid) transports.delete(sid);
+        };
+        await createAndConnectMCPTransport(transport);
+      } else {
+        res.status(400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: No valid session ID or not an initialization request' }, id: null });
+        return;
+      }
+
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
+      }
+    }
+  });
+
+  app.get('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !transports.has(sessionId)) {
+      res.status(400).json({ error: 'Invalid or missing session ID' });
+      return;
+    }
+    const transport = transports.get(sessionId)!;
+    await transport.handleRequest(req, res);
+  });
+
+  app.delete('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !transports.has(sessionId)) {
+      res.status(400).json({ error: 'Invalid or missing session ID' });
+      return;
+    }
+    const transport = transports.get(sessionId)!;
+    await transport.handleRequest(req, res);
   });
 
   // --- Auth endpoints ---

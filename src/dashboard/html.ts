@@ -199,8 +199,10 @@ curl -X POST https://factorium.network/attestations/ATTESTATION_ID/purchase \\
 
     <div class="agents-section" style="margin-top:16px">
       <h3>MCP Server (for AI agent frameworks)</h3>
-      <p>Connect Claude, Cursor, or any MCP-compatible agent directly. Tools include query, purchase, submit attestation, post bounties, and more.</p>
-      <p>OpenAPI spec: <code>https://factorium.network/openapi.json</code></p>
+      <p>Connect Claude, Cursor, or any MCP-compatible agent directly to Factorium. Endpoint:</p>
+      <pre style="margin:12px 0"><code>https://factorium.network/mcp</code></pre>
+      <p style="margin-bottom:4px">Tools include query, purchase, submit attestation, register verifier, check balance, deposit, withdraw, and more.</p>
+      <p style="margin-bottom:4px">OpenAPI spec: <code>https://factorium.network/openapi.json</code></p>
       <p>A2A Agent Card: <code>https://factorium.network/.well-known/agent.json</code></p>
     </div>
   </div>

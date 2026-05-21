@@ -1,10 +1,12 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import { randomUUID } from 'crypto';
 import {
   submitAttestation,
   queryAttestations,
@@ -28,7 +30,6 @@ import {
   AttestationQuerySchema,
   DisputeSchema,
 } from '../types/index.js';
-import type { AttestationType } from '../types/index.js';
 import {
   getOrCreateWallet,
   getWallet,
@@ -42,7 +43,7 @@ const TOOLS: Tool[] = [
   {
     name: 'query_attestation',
     description:
-      'Search the assertion marketplace for existing attestations. Use this to check if verification work has already been done before re-running expensive compute. Returns attestations sorted by confidence and price.',
+      'Search the attestation marketplace for existing verifications. Use before re-running expensive compute. Returns attestations sorted by confidence and price.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -69,7 +70,7 @@ const TOOLS: Tool[] = [
         },
         maxPrice: {
           type: 'number',
-          description: 'Maximum price in tokens',
+          description: 'Maximum price in sats',
         },
         limit: { type: 'number', description: 'Max results (default 50)' },
       },
@@ -78,7 +79,7 @@ const TOOLS: Tool[] = [
   {
     name: 'buy_attestation',
     description:
-      'Purchase access to a verified attestation. Transfers payment to the verifier minus a 10% marketplace fee. Returns the full attestation data.',
+      'Purchase access to a verified attestation. Transfers payment to the verifier minus 10% marketplace fee. Returns the full attestation data.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -97,7 +98,7 @@ const TOOLS: Tool[] = [
   {
     name: 'register_verifier',
     description:
-      'Register as a new verifier on the marketplace. Verifiers stake tokens as reputation collateral and earn revenue when their attestations are purchased.',
+      'Register as a new verifier on the marketplace. Verifiers stake sats as reputation collateral and earn revenue when their attestations are purchased.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -109,7 +110,7 @@ const TOOLS: Tool[] = [
         publicKey: { type: 'string', description: 'Public key for signature verification' },
         initialStake: {
           type: 'number',
-          description: 'Initial token stake for reputation collateral',
+          description: 'Initial stake in sats for reputation collateral',
         },
       },
       required: ['name', 'endpoint', 'publicKey', 'initialStake'],
@@ -118,7 +119,7 @@ const TOOLS: Tool[] = [
   {
     name: 'submit_attestation',
     description:
-      'Submit a new attestation to the marketplace. Once submitted, other agents can discover and purchase this attestation instead of re-running the verification themselves.',
+      'Submit a new attestation to the marketplace. Other agents can discover and purchase this instead of re-running verification. Requires 10x stake.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -149,7 +150,7 @@ const TOOLS: Tool[] = [
         },
         price: {
           type: 'number',
-          description: 'Price in tokens per access',
+          description: 'Price in sats per access',
         },
         royaltyPerAccess: {
           type: 'number',
@@ -170,7 +171,7 @@ const TOOLS: Tool[] = [
   {
     name: 'check_verifier_reputation',
     description:
-      'Check the reputation and stake of a verifier. Use this to assess the trustworthiness of attestations from a given verifier before purchasing.',
+      'Check the reputation and stake of a verifier before trusting their attestations.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -185,7 +186,7 @@ const TOOLS: Tool[] = [
   {
     name: 'list_verifiers',
     description:
-      'List all active verifiers on the marketplace, sorted by reputation score. Use this to discover which verifiers are available and their trust levels.',
+      'List all active verifiers on the marketplace, sorted by reputation score.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -199,7 +200,7 @@ const TOOLS: Tool[] = [
   {
     name: 'dispute_attestation',
     description:
-      'File a dispute against an attestation you believe is incorrect. Successful disputes reduce the verifier reputation and may trigger slashing of their stake.',
+      'File a dispute against an attestation you believe is incorrect. Successful disputes reduce verifier reputation and may slash their stake.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -231,7 +232,7 @@ const TOOLS: Tool[] = [
   {
     name: 'create_deposit_invoice',
     description:
-      'Create a Lightning Network invoice to deposit funds into your marketplace wallet. Returns a Lightning invoice (BOLT11) that you pay with any Lightning wallet. Funds appear in your balance after payment is confirmed.',
+      'Create a Lightning Network invoice to deposit funds into your marketplace wallet. Returns a BOLT11 invoice. Pay it with any Lightning wallet.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -258,7 +259,7 @@ const TOOLS: Tool[] = [
   {
     name: 'confirm_deposit',
     description:
-      'Check if a deposit invoice has been paid and credit the funds to your balance.',
+      'Confirm a Lightning deposit has been paid. Credits funds to your wallet balance.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -272,8 +273,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'check_balance',
-    description:
-      'Check your wallet balance in the marketplace. Returns available sats balance.',
+    description: 'Check your wallet balance in the marketplace.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -288,7 +288,7 @@ const TOOLS: Tool[] = [
   {
     name: 'withdraw_funds',
     description:
-      'Withdraw your earnings from the marketplace to an external Lightning wallet. Provide a Lightning invoice (BOLT11) for the amount you want to withdraw.',
+      'Withdraw earnings to an external Lightning wallet. Provide a BOLT11 invoice.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -298,11 +298,11 @@ const TOOLS: Tool[] = [
         },
         invoice: {
           type: 'string',
-          description: 'A Lightning Network invoice (BOLT11) from your wallet for the withdrawal amount',
+          description: 'A Lightning Network invoice (BOLT11) from your wallet',
         },
         amount: {
           type: 'number',
-          description: 'Amount in satoshis to withdraw (must match the invoice)',
+          description: 'Amount in sats to withdraw (must match the invoice)',
         },
       },
       required: ['ownerId', 'invoice', 'amount'],
@@ -310,9 +310,9 @@ const TOOLS: Tool[] = [
   },
 ];
 
-export async function startMCPServer(): Promise<void> {
+function createServer(): Server {
   const server = new Server(
-    { name: 'factorium-attestation-marketplace', version: '1.0.6' },
+    { name: 'factorium-attestation-marketplace', version: '1.0.7' },
     { capabilities: { tools: {} } }
   );
 
@@ -326,268 +326,155 @@ export async function startMCPServer(): Promise<void> {
         case 'query_attestation': {
           const validated = AttestationQuerySchema.parse(args ?? {});
           const result = queryAttestations(validated);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result, null, 2),
-              },
-            ],
-          };
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
-
         case 'buy_attestation': {
-          const { attestationId, buyerId } = args as {
-            attestationId: string;
-            buyerId: string;
-          };
+          const { attestationId, buyerId } = args as { attestationId: string; buyerId: string };
           const result = purchaseAttestation(attestationId, buyerId);
           return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    transactionId: result.transactionId,
-                    attestation: result.attestation,
-                    message: `Successfully purchased attestation for ${result.attestation.price} tokens. ${result.attestation.price * 0.1} tokens marketplace fee.`,
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                transactionId: result.transactionId,
+                attestation: result.attestation,
+                message: `Purchased attestation for ${result.attestation.price} sats.`,
+              }, null, 2),
+            }],
           };
         }
-
         case 'register_verifier': {
           const validated = VerifierRegistrationSchema.parse(args ?? {});
           const verifier = registerVerifier(validated);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(verifier, null, 2),
-              },
-            ],
-          };
+          return { content: [{ type: 'text', text: JSON.stringify(verifier, null, 2) }] };
         }
-
         case 'submit_attestation': {
           const validated = AttestationSubmissionSchema.parse(args ?? {});
           const { verifierId, ...rest } = validated;
           const verifier = getVerifier(verifierId);
-          if (!verifier) {
-            throw new Error(`Verifier not found: ${verifierId}`);
-          }
-          if (!verifier.active) {
-            throw new Error(`Verifier is inactive: ${verifierId}`);
+          if (!verifier) throw new Error(`Verifier not found: ${verifierId}`);
+          if (!verifier.active) throw new Error(`Verifier is inactive: ${verifierId}`);
+          if (verifier.stakedAmount < validated.price * 10) {
+            throw new Error(`Insufficient stake. Need ${validated.price * 10}, have ${verifier.stakedAmount}.`);
           }
           const attestation = submitAttestation({ ...rest, verifierId });
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(attestation, null, 2),
-              },
-            ],
-          };
+          return { content: [{ type: 'text', text: JSON.stringify(attestation, null, 2) }] };
         }
-
         case 'check_verifier_reputation': {
           const { verifierId } = args as { verifierId: string };
           const verifier = getVerifier(verifierId);
           if (!verifier) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({ error: `Verifier not found: ${verifierId}` }),
-                },
-              ],
-            };
+            return { content: [{ type: 'text', text: JSON.stringify({ error: `Verifier not found: ${verifierId}` }) }] };
           }
           return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    id: verifier.id,
-                    name: verifier.name,
-                    reputationScore: verifier.reputationScore,
-                    stakedAmount: verifier.stakedAmount,
-                    totalAttestations: verifier.totalAttestations,
-                    successfulAttestations: verifier.successfulAttestations,
-                    disputedAttestations: verifier.disputedAttestations,
-                    disputeRate:
-                      verifier.totalAttestations > 0
-                        ? (
-                            verifier.disputedAttestations /
-                            verifier.totalAttestations
-                          ).toFixed(4)
-                        : '0',
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                id: verifier.id,
+                name: verifier.name,
+                reputationScore: verifier.reputationScore,
+                stakedAmount: verifier.stakedAmount,
+                totalAttestations: verifier.totalAttestations,
+                successfulAttestations: verifier.successfulAttestations,
+                disputedAttestations: verifier.disputedAttestations,
+                disputeRate: verifier.totalAttestations > 0
+                  ? (verifier.disputedAttestations / verifier.totalAttestations).toFixed(4)
+                  : '0',
+              }, null, 2),
+            }],
           };
         }
-
         case 'list_verifiers': {
           const { limit } = (args ?? {}) as { limit?: number };
           const verifiers = listVerifiers(true).slice(0, limit || 50);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(verifiers, null, 2),
-              },
-            ],
-          };
+          return { content: [{ type: 'text', text: JSON.stringify(verifiers, null, 2) }] };
         }
-
         case 'dispute_attestation': {
           const validated = DisputeSchema.parse(args ?? {});
-          const updated = disputeAttestation(
-            validated.attestationId,
-            validated.reason
-          );
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  { message: 'Dispute filed successfully', attestation: updated },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          const updated = disputeAttestation(validated.attestationId, validated.reason);
+          return { content: [{ type: 'text', text: JSON.stringify({ message: 'Dispute filed', attestation: updated }, null, 2) }] };
         }
-
         case 'get_marketplace_stats': {
           const stats = getMarketplaceStats();
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(stats, null, 2),
-              },
-            ],
-          };
+          return { content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }] };
         }
-
         case 'create_deposit_invoice': {
           const { ownerId, ownerType, amount, memo } = args as {
-            ownerId: string;
-            ownerType: 'verifier' | 'buyer';
-            amount: number;
-            memo: string;
+            ownerId: string; ownerType: 'verifier' | 'buyer'; amount: number; memo: string;
           };
           const invoice = await createDepositInvoice(ownerId, ownerType, amount, memo);
           return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    message: `Lightning invoice created for ${amount} sats. Pay this invoice to deposit funds.`,
-                    invoice,
-                    instructions: 'Pay this BOLT11 invoice with any Lightning wallet, then call confirm_deposit with the payment_hash.',
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                message: `Lightning invoice created for ${amount} sats.`,
+                invoice,
+                instructions: 'Pay this BOLT11 invoice, then call confirm_deposit with the payment_hash.',
+              }, null, 2),
+            }],
           };
         }
-
         case 'confirm_deposit': {
           const { paymentHash } = args as { paymentHash: string };
           const result = await confirmDeposit(paymentHash);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result, null, 2),
-              },
-            ],
-          };
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
-
         case 'check_balance': {
           const { ownerId } = args as { ownerId: string };
           const wallet = getWallet(ownerId);
           if (!wallet) {
             getOrCreateWallet(ownerId, 'buyer');
             return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({ ownerId, balance: 0, lightningConfigured: isLightningConfigured() }, null, 2),
-                },
-              ],
+              content: [{ type: 'text', text: JSON.stringify({ ownerId, balance: 0, lightningConfigured: isLightningConfigured() }, null, 2) }],
             };
           }
           return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    ownerId,
-                    balance: wallet.balance,
-                    lightningConfigured: isLightningConfigured(),
-                    hasLNBitsWallet: !!wallet.lnbitsWalletId,
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ ownerId, balance: wallet.balance, lightningConfigured: isLightningConfigured(), hasLNBitsWallet: !!wallet.lnbitsWalletId, }, null, 2),
+            }],
           };
         }
-
         case 'withdraw_funds': {
-          const { ownerId, invoice, amount } = args as {
-            ownerId: string;
-            invoice: string;
-            amount: number;
-          };
+          const { ownerId, invoice, amount } = args as { ownerId: string; invoice: string; amount: number };
           const result = await withdrawFunds(ownerId, invoice, amount);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result, null, 2),
-              },
-            ],
-          };
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
-
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
     } catch (error) {
       return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              error: error instanceof Error ? error.message : 'Unknown error',
-            }),
-          },
-        ],
+        content: [{ type: 'text', text: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }) }],
         isError: true,
       };
     }
   });
 
+  return server;
+}
+
+let sharedServer: Server | null = null;
+
+export function getOrCreateMCPServer(): Server {
+  if (!sharedServer) {
+    sharedServer = createServer();
+  }
+  return sharedServer;
+}
+
+export async function startMCPServer(): Promise<void> {
+  const server = getOrCreateMCPServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+export function createMCPHttpTransport(): StreamableHTTPServerTransport {
+  return new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+}
+
+export async function createAndConnectMCPTransport(transport: StreamableHTTPServerTransport, server?: Server): Promise<void> {
+  const srv = server || getOrCreateMCPServer();
+  await srv.connect(transport);
 }
