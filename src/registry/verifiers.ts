@@ -38,9 +38,10 @@ export function registerVerifier(params: {
   endpoint: string;
   publicKey: string;
   initialStake: number;
+  id?: string;
 }): Verifier {
   const db = getDatabase();
-  const id = uuid();
+  const id = params.id || uuid();
   const now = new Date().toISOString();
 
   db.prepare(`

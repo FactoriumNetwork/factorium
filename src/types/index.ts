@@ -136,3 +136,18 @@ export const DisputeSchema = z.object({
   reason: z.string().min(1).max(1000),
   evidence: z.string().optional(),
 });
+
+export const SignupSchema = z.object({
+  name: z.string().min(1).max(100),
+});
+
+export const LoginSchema = z.object({
+  agentId: z.string().min(1),
+  apiKey: z.string().min(1),
+});
+
+export interface ApiAgent {
+  agentId: string;
+  name: string;
+  createdAt: string;
+}

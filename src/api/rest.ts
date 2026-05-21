@@ -29,6 +29,7 @@ import {
   VerifierRegistrationSchema,
   AttestationQuerySchema,
   DisputeSchema,
+  SignupSchema,
 } from '../types/index.js';
 import {
   getOrCreateWallet,
@@ -51,33 +52,71 @@ import {
   cancelBounty,
   getBountiesByPoster,
 } from '../bounties/bounty-market.js';
-import { renderDashboard } from '../dashboard/html.js';
+import { generateApiKey, validateApiKey } from '../auth/keys.js';
+import { renderLanding, renderDashboard, renderLogin } from '../dashboard/html.js';
 
 const OPENAPI_SPEC = {
   openapi: '3.0.3',
   info: {
     title: 'Factorium — Attestation Marketplace Protocol',
     description: 'Decentralized marketplace where AI systems buy and sell verified attestations. Eliminate redundant compute. Buyers query pre-computed verification results. Verifiers earn on every query. 10% marketplace fee. 10x stake requirement.',
-    version: '1.0.5',
+    version: '1.0.7',
     contact: { name: 'Factorium', url: 'https://factorium.network' },
   },
   servers: [{ url: 'https://factorium.network', description: 'Production' }],
   paths: {
+    '/signup': { post: { summary: 'Create an agent account', requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' } } } } } }, responses: { '201': { description: 'Agent created with API key' } } } },
     '/attestations': {
       get: { summary: 'Query attestations', parameters: [{ name: 'type', in: 'query', schema: { type: 'string' } }, { name: 'subject', in: 'query', schema: { type: 'string' } }, { name: 'minConfidence', in: 'query', schema: { type: 'number' } }, { name: 'maxPrice', in: 'query', schema: { type: 'number' } }], responses: { '200': { description: 'Attestation query results' } } },
-      post: { summary: 'Submit new attestation', requestBody: { content: { 'application/json': { schema: { type: 'object' } } } }, responses: { '201': { description: 'Attestation created' } } },
+      post: { summary: 'Submit new attestation (auth required)', requestBody: { content: { 'application/json': { schema: { type: 'object' } } } }, responses: { '201': { description: 'Attestation created' } } },
     },
     '/bounties': {
       get: { summary: 'List open bounties', parameters: [{ name: 'type', in: 'query', schema: { type: 'string' } }], responses: { '200': { description: 'Open bounties' } } },
-      post: { summary: 'Post a funded verification bounty', requestBody: { content: { 'application/json': { schema: { type: 'object' } } } }, responses: { '201': { description: 'Bounty created' } } },
+      post: { summary: 'Post a funded verification bounty (auth required)', requestBody: { content: { 'application/json': { schema: { type: 'object' } } } }, responses: { '201': { description: 'Bounty created' } } },
     },
-    '/verifiers': { get: { summary: 'List active verifiers', responses: { '200': { description: 'Verifier list' } } }, post: { summary: 'Register as verifier', responses: { '201': { description: 'Verifier created' } } } },
+    '/verifiers': { get: { summary: 'List active verifiers', responses: { '200': { description: 'Verifier list' } } }, post: { summary: 'Register as verifier (auth required)', responses: { '201': { description: 'Verifier created' } } } },
     '/wallets/{ownerId}': { get: { summary: 'Check wallet balance', parameters: [{ name: 'ownerId', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Wallet details' } } } },
     '/stats': { get: { summary: 'Marketplace statistics', responses: { '200': { description: 'Stats' } } } },
     '/usage': { get: { summary: 'Usage report and activity feed', responses: { '200': { description: 'Usage report' } } } },
     '/openapi.json': { get: { summary: 'OpenAPI spec for agent discovery', responses: { '200': { description: 'OpenAPI 3.0 spec' } } } },
   },
 };
+
+function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const agentId = req.headers['x-agent-id'] as string | undefined;
+  const apiKey = req.headers['x-api-key'] as string | undefined;
+
+  if (!agentId || !apiKey) {
+    res.status(401).json({ error: 'Missing X-Agent-Id or X-Api-Key header. Create an account: POST /signup' });
+    return;
+  }
+
+  const agent = validateApiKey(agentId, apiKey);
+  if (!agent) {
+    res.status(401).json({ error: 'Invalid credentials' });
+    return;
+  }
+
+  (req as AuthRequest).agent = agent;
+  next();
+}
+
+interface AuthRequest extends express.Request {
+  agent?: { agentId: string; name: string; createdAt: string };
+}
+
+function authAgent(req: express.Request): { agentId: string; name: string } {
+  const agent = (req as AuthRequest).agent;
+  if (!agent) throw new Error('Not authenticated');
+  return agent;
+}
+
+function assertOwner(req: express.Request, claimedId: string, role: string): void {
+  const agent = authAgent(req);
+  if (agent.agentId !== claimedId) {
+    throw new Error(`${role} must match authenticated agent (${agent.agentId}), got ${claimedId}`);
+  }
+}
 
 export function createAPI(): express.Express {
   const app = express();
@@ -97,25 +136,112 @@ export function createAPI(): express.Express {
     next();
   });
 
+  // --- Public pages ---
+
   app.get('/', (_req, res) => {
     autoSeedDailyIfNeeded();
     const stats = getMarketplaceStats();
     const usage = getUsageReport();
     const openBounties = listOpenBounties(undefined, 100);
     res.setHeader('Content-Type', 'text/html');
-    res.send(renderDashboard(
+    res.send(renderLanding(
       stats as unknown as Record<string, unknown>,
       usage as unknown as Record<string, unknown>,
       openBounties.length
     ));
   });
 
+  app.get('/dashboard', (req, res) => {
+    const agentId = req.query.agentId as string | undefined;
+    const apiKey = req.query.key as string | undefined;
+
+    if (!agentId || !apiKey) {
+      res.setHeader('Content-Type', 'text/html');
+      res.send(renderLogin());
+      return;
+    }
+
+    const agent = validateApiKey(agentId, apiKey);
+    if (!agent) {
+      res.setHeader('Content-Type', 'text/html');
+      res.send(renderLogin('Invalid credentials. Check your Agent ID and API Key.'));
+      return;
+    }
+
+    autoSeedDailyIfNeeded();
+    onboardAgent(agentId, 'buyer');
+    const wallet = getWallet(agentId);
+    const stats = getMarketplaceStats();
+    const openBounties = listOpenBounties(undefined, 50);
+    const myBounties = getBountiesByPoster(agentId);
+    const myTxns = getBuyerHistory(agentId);
+    const myVerifier = getVerifier(agentId);
+    const verifiers = listVerifiers(true);
+
+    res.setHeader('Content-Type', 'text/html');
+    res.send(renderDashboard({
+      agent,
+      apiKey,
+      wallet: wallet ? { balance: wallet.balance, ownerType: wallet.ownerType } : { balance: 0, ownerType: 'buyer' as const },
+      stats: stats as unknown as Record<string, unknown>,
+      openBounties: openBounties.length,
+      bounties: openBounties.slice(0, 20),
+      myBounties: myBounties.slice(0, 20),
+      myTxns: myTxns.slice(0, 20),
+      myVerifier,
+      verifiers: verifiers.slice(0, 20),
+    }));
+  });
+
+  // --- API specs ---
+
   app.get('/openapi.json', (_req, res) => {
     res.json(OPENAPI_SPEC);
   });
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', protocol: 'factorium', version: '1.0.6' });
+    res.json({ status: 'ok', protocol: 'factorium', version: '1.0.7' });
+  });
+
+  // --- Auth endpoints ---
+
+  app.post('/signup', (req, res) => {
+    try {
+      const { name } = SignupSchema.parse(req.body);
+      const { agentId, apiKey } = generateApiKey(name);
+      onboardAgent(agentId, 'buyer');
+      logActivity('agent_signup', `Agent ${name} (${agentId}) created`, agentId);
+      res.status(201).json({
+        agentId,
+        apiKey,
+        name,
+        message: 'Agent account created. Save your API key — it will not be shown again. You have 1,000 free credits.',
+        nextSteps: [
+          `Dashboard: /dashboard?agentId=${agentId}&key=${apiKey}`,
+          'Query attestations: GET /attestations?type=fact-check',
+          'Post a bounty: POST /bounties',
+          'Check balance: GET /wallets/' + agentId,
+        ],
+      });
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.get('/me', requireAuth, (req, res) => {
+    const agent = authAgent(req);
+    const wallet = getWallet(agent.agentId);
+    const bounties = getBountiesByPoster(agent.agentId);
+    const txns = getBuyerHistory(agent.agentId);
+    const verifier = getVerifier(agent.agentId);
+    res.json({
+      agent,
+      wallet: wallet ? { balance: wallet.balance, ownerType: wallet.ownerType } : null,
+      bountiesPosted: bounties.length,
+      transactions: txns.length,
+      isVerifier: !!verifier,
+      verifier,
+    });
   });
 
   app.get('/usage', (_req, res) => {
@@ -138,7 +264,7 @@ export function createAPI(): express.Express {
     });
   });
 
-  // --- Attestations ---
+  // --- Attestations (query is public, write requires auth) ---
 
   app.get('/attestations', (req, res) => {
     try {
@@ -154,7 +280,7 @@ export function createAPI(): express.Express {
       if (result.total === 0) {
         res.json({
           ...result,
-          message: 'No attestations found. Post a bounty to fund verification: POST /bounties',
+          message: 'No attestations found. Post a bounty to fund verification: POST /bounties (auth required)',
           openBounties: listOpenBounties(validated.type, 5).length,
         });
         return;
@@ -175,50 +301,54 @@ export function createAPI(): express.Express {
     res.json(a);
   });
 
-  app.post('/attestations', (req, res) => {
+  app.post('/attestations', requireAuth, (req, res) => {
     try {
+      const agent = authAgent(req);
       const validated = AttestationSubmissionSchema.parse(req.body);
-      const { verifierId, ...rest } = validated;
-      const verifier = getVerifier(verifierId);
+      assertOwner(req, validated.verifierId, 'verifierId');
+
+      const verifier = getVerifier(validated.verifierId);
       if (!verifier) {
-        res.status(404).json({ error: `Verifier not found: ${verifierId}` });
+        res.status(404).json({ error: `Verifier not found: ${validated.verifierId}. Register first: POST /verifiers` });
         return;
       }
       if (!verifier.active) {
-        res.status(403).json({ error: `Verifier is inactive: ${verifierId}` });
+        res.status(403).json({ error: `Verifier is inactive: ${validated.verifierId}` });
         return;
       }
       if (verifier.stakedAmount < validated.price * 10) {
         res.status(403).json({
-          error: `Insufficient stake. Need ${validated.price * 10} (10x price). Have ${verifier.stakedAmount}.`,
+          error: `Insufficient stake. Need ${validated.price * 10} (10x price). Have ${verifier.stakedAmount}. Stake more: POST /verifiers/${validated.verifierId}/stake`,
         });
         return;
       }
-      const attestation = submitAttestation({ ...rest, verifierId });
-      logActivity('attestation_submitted', `${attestation.type}: ${attestation.resultSummary.slice(0, 80)}`, verifierId);
+      const attestation = submitAttestation({ ...validated, verifierId: agent.agentId });
+      logActivity('attestation_submitted', `${attestation.type}: ${attestation.resultSummary.slice(0, 80)}`, agent.agentId);
       res.status(201).json(attestation);
     } catch (err) {
       res.status(400).json({ error: String(err) });
     }
   });
 
-  app.post('/attestations/:id/purchase', (req, res) => {
+  app.post('/attestations/:id/purchase', requireAuth, (req, res) => {
     try {
+      const agent = authAgent(req);
       const { buyerId } = req.body;
       if (!buyerId) {
         res.status(400).json({ error: 'buyerId required' });
         return;
       }
-      onboardAgent(buyerId, 'buyer');
-      const result = purchaseAttestation(req.params.id, buyerId);
-      logActivity('attestation_purchased', `Buyer ${buyerId.slice(0, 8)} paid ${result.attestation.price} sats for ${result.attestation.type}`, buyerId);
+      assertOwner(req, buyerId, 'buyerId');
+      onboardAgent(agent.agentId, 'buyer');
+      const result = purchaseAttestation(req.params.id as string, agent.agentId);
+      logActivity('attestation_purchased', `Buyer ${agent.agentId.slice(0, 8)} paid ${result.attestation.price} sats for ${result.attestation.type}`, agent.agentId);
       res.json(result);
     } catch (err) {
       res.status(400).json({ error: String(err) });
     }
   });
 
-  app.post('/attestations/:id/dispute', (req, res) => {
+  app.post('/attestations/:id/dispute', requireAuth, (req, res) => {
     try {
       const validated = DisputeSchema.parse({
         attestationId: req.params.id,
@@ -231,24 +361,26 @@ export function createAPI(): express.Express {
     }
   });
 
-  // --- Bounties ---
+  // --- Bounties (read is public, write requires auth) ---
 
   app.get('/bounties', (req, res) => {
     const type = req.query.type as string | undefined;
     res.json(listOpenBounties(type as any));
   });
 
-  app.post('/bounties', (req, res) => {
+  app.post('/bounties', requireAuth, (req, res) => {
     try {
+      const agent = authAgent(req);
       const { type, subject, reward, postedBy, expiresInSeconds } = req.body;
       if (!type || !subject || !reward || !postedBy) {
         res.status(400).json({ error: 'type, subject, reward, and postedBy required' });
         return;
       }
-      onboardAgent(postedBy, 'buyer');
+      assertOwner(req, postedBy, 'postedBy');
+      onboardAgent(agent.agentId, 'buyer');
       const subjectHash = hashSubject(subject);
-      const bounty = postBounty({ type, subject, subjectHash, reward, postedBy, expiresInSeconds });
-      logActivity('bounty_posted', `${type}: ${subject.slice(0, 60)} (${reward} sats)`, postedBy);
+      const bounty = postBounty({ type, subject, subjectHash, reward, postedBy: agent.agentId, expiresInSeconds });
+      logActivity('bounty_posted', `${type}: ${subject.slice(0, 60)} (${reward} sats)`, agent.agentId);
       res.status(201).json(bounty);
     } catch (err) {
       res.status(400).json({ error: String(err) });
@@ -264,44 +396,49 @@ export function createAPI(): express.Express {
     res.json(b);
   });
 
-  app.post('/bounties/:id/claim', (req, res) => {
+  app.post('/bounties/:id/claim', requireAuth, (req, res) => {
     try {
+      const agent = authAgent(req);
       const { verifierId } = req.body;
       if (!verifierId) {
         res.status(400).json({ error: 'verifierId required' });
         return;
       }
-      const bounty = claimBounty(req.params.id, verifierId);
-      logActivity('bounty_claimed', `Bounty ${req.params.id.slice(0, 8)} claimed by verifier ${verifierId.slice(0, 8)}`, verifierId);
+      assertOwner(req, verifierId, 'verifierId');
+      const bounty = claimBounty(req.params.id as string, agent.agentId);
+      logActivity('bounty_claimed', `Bounty ${(req.params.id as string).slice(0, 8)} claimed by ${agent.agentId.slice(0, 8)}`, agent.agentId);
       res.json(bounty);
     } catch (err) {
       res.status(400).json({ error: String(err) });
     }
   });
 
-  app.post('/bounties/:id/fulfill', (req, res) => {
+  app.post('/bounties/:id/fulfill', requireAuth, (req, res) => {
     try {
+      const agent = authAgent(req);
       const { result, resultSummary, confidence } = req.body;
       if (!result || !resultSummary || confidence === undefined) {
         res.status(400).json({ error: 'result, resultSummary, and confidence required' });
         return;
       }
-      const fulfilled = fulfillBounty(req.params.id, result, resultSummary, confidence);
-      logActivity('bounty_fulfilled', `Bounty fulfilled: ${resultSummary.slice(0, 60)}`, fulfilled.bounty.fulfilledBy ?? undefined);
+      const fulfilled = fulfillBounty(req.params.id as string, result, resultSummary, confidence);
+      logActivity('bounty_fulfilled', `Bounty fulfilled: ${resultSummary.slice(0, 60)}`, agent.agentId);
       res.json(fulfilled);
     } catch (err) {
       res.status(400).json({ error: String(err) });
     }
   });
 
-  app.post('/bounties/:id/cancel', (req, res) => {
+  app.post('/bounties/:id/cancel', requireAuth, (req, res) => {
     try {
+      const agent = authAgent(req);
       const { requestedBy } = req.body;
       if (!requestedBy) {
         res.status(400).json({ error: 'requestedBy required' });
         return;
       }
-      const bounty = cancelBounty(req.params.id, requestedBy);
+      assertOwner(req, requestedBy, 'requestedBy');
+      const bounty = cancelBounty(req.params.id as string, agent.agentId);
       res.json(bounty);
     } catch (err) {
       res.status(400).json({ error: String(err) });
@@ -312,7 +449,7 @@ export function createAPI(): express.Express {
     res.json(getBountiesByPoster(req.params.posterId));
   });
 
-  // --- Verifiers ---
+  // --- Verifiers (read is public, registration requires auth) ---
 
   app.get('/verifiers', (_req, res) => {
     res.json(listVerifiers(true));
@@ -332,11 +469,13 @@ export function createAPI(): express.Express {
     res.json(v);
   });
 
-  app.post('/verifiers', (req, res) => {
+  app.post('/verifiers', requireAuth, (req, res) => {
     try {
+      const agent = authAgent(req);
       const validated = VerifierRegistrationSchema.parse(req.body);
-      const verifier = registerVerifier(validated);
-      logActivity('verifier_registered', `${validated.name} registered with ${validated.initialStake} stake`, verifier.id);
+      onboardAgent(agent.agentId, 'verifier');
+      const verifier = registerVerifier({ ...validated, id: agent.agentId });
+      logActivity('verifier_registered', `${validated.name} registered with ${validated.initialStake} stake`, agent.agentId);
       res.status(201).json(verifier);
     } catch (err) {
       res.status(400).json({ error: String(err) });
@@ -361,30 +500,32 @@ export function createAPI(): express.Express {
     res.json(getStakingHistory(req.params.id));
   });
 
-  app.post('/verifiers/:id/stake', (req, res) => {
+  app.post('/verifiers/:id/stake', requireAuth, (req, res) => {
     try {
+      const agent = authAgent(req);
+      assertOwner(req, req.params.id as string, 'verifierId');
       const { amount } = req.body;
-      const v = stake(req.params.id, amount);
+      const v = stake(agent.agentId, amount);
       res.json(v);
     } catch (err) {
       res.status(400).json({ error: String(err) });
     }
   });
 
-  app.post('/verifiers/:id/slash', (req, res) => {
+  app.post('/verifiers/:id/slash', requireAuth, (req, res) => {
     try {
       const { amount, reason } = req.body;
-      const v = slash(req.params.id, amount, reason);
+      const v = slash(req.params.id as string, amount, reason);
       res.json(v);
     } catch (err) {
       res.status(400).json({ error: String(err) });
     }
   });
 
-  app.post('/verifiers/:id/reputation', (req, res) => {
+  app.post('/verifiers/:id/reputation', requireAuth, (req, res) => {
     try {
       const { delta } = req.body;
-      const v = updateReputation(req.params.id, delta);
+      const v = updateReputation(req.params.id as string, delta);
       res.json(v);
     } catch (err) {
       res.status(400).json({ error: String(err) });
@@ -413,7 +554,7 @@ export function createAPI(): express.Express {
     res.json({ subject, hash: hashSubject(subject) });
   });
 
-  // --- Payments ---
+  // --- Payments (wallet read is public, write requires auth) ---
 
   app.get('/wallets/:ownerId', (req, res) => {
     const wallet = getWallet(req.params.ownerId);
@@ -431,15 +572,17 @@ export function createAPI(): express.Express {
     });
   });
 
-  app.post('/wallets/:ownerId/deposit', async (req, res) => {
+  app.post('/wallets/:ownerId/deposit', requireAuth, async (req, res) => {
     try {
+      const agent = authAgent(req);
+      assertOwner(req, req.params.ownerId as string, 'ownerId');
       const { amount, memo, ownerType } = req.body;
       if (!amount || !memo) {
         res.status(400).json({ error: 'amount and memo required' });
         return;
       }
       const invoice = await createDepositInvoice(
-        req.params.ownerId,
+        agent.agentId,
         ownerType || 'buyer',
         amount,
         memo
@@ -450,7 +593,7 @@ export function createAPI(): express.Express {
     }
   });
 
-  app.post('/wallets/deposit/confirm', async (req, res) => {
+  app.post('/wallets/deposit/confirm', requireAuth, async (req, res) => {
     try {
       const { paymentHash } = req.body;
       if (!paymentHash) {
@@ -464,14 +607,16 @@ export function createAPI(): express.Express {
     }
   });
 
-  app.post('/wallets/:ownerId/withdraw', async (req, res) => {
+  app.post('/wallets/:ownerId/withdraw', requireAuth, async (req, res) => {
     try {
+      const agent = authAgent(req);
+      assertOwner(req, req.params.ownerId as string, 'ownerId');
       const { invoice, amount } = req.body;
       if (!invoice || !amount) {
         res.status(400).json({ error: 'invoice and amount required' });
         return;
       }
-      const result = await withdrawFunds(req.params.ownerId, invoice, amount);
+      const result = await withdrawFunds(agent.agentId, invoice, amount);
       res.json(result);
     } catch (err) {
       res.status(400).json({ error: String(err) });
@@ -486,21 +631,25 @@ export function startAPI(port = 3099): void {
   app.listen(port, () => {
     console.log(`Factorium — Attestation Marketplace Protocol`);
     console.log(`Running on http://localhost:${port}`);
-    console.log(`  GET  /                           Live dashboard`);
-    console.log(`  GET  /openapi.json                OpenAPI spec for agent discovery`);
-    console.log(`  GET  /usage                       Usage report & activity`);
-    console.log(`  GET  /stats                       Marketplace statistics`);
-    console.log(`  GET  /attestations?type=&...      Query attestations`);
-    console.log(`  POST /attestations                Submit attestation (10x stake enforced)`);
-    console.log(`  POST /attestations/:id/purchase   Buy attestation`);
-    console.log(`  POST /attestations/:id/dispute    Dispute attestation`);
-    console.log(`  GET  /bounties                    List open bounties`);
-    console.log(`  POST /bounties                    Post funded verification bounty`);
-    console.log(`  POST /bounties/:id/claim          Claim a bounty`);
-    console.log(`  POST /bounties/:id/fulfill        Fulfill a bounty`);
-    console.log(`  GET  /verifiers                   List verifiers`);
-    console.log(`  POST /verifiers                   Register verifier`);
-    console.log(`  GET  /wallets/:ownerId            Check balance`);
-    console.log(`  GET  /welcome/:agentId            Agent onboarding + free credits`);
+    console.log(`  GET  /                           Landing page (sign up to get started)`);
+    console.log(`  GET  /dashboard?agentId=X&key=Y  Your dashboard`);
+    console.log(`  POST /signup                     Create agent account`);
+    console.log(`  GET  /me                         Agent profile (auth required)`);
+    console.log(`  GET  /openapi.json               OpenAPI spec for agent discovery`);
+    console.log(`  GET  /usage                      Usage report & activity`);
+    console.log(`  GET  /stats                      Marketplace statistics`);
+    console.log(`  GET  /attestations?type=&...     Query attestations`);
+    console.log(`  POST /attestations               Submit attestation (auth + stake required)`);
+    console.log(`  POST /attestations/:id/purchase  Buy attestation (auth required)`);
+    console.log(`  POST /attestations/:id/dispute   Dispute attestation (auth required)`);
+    console.log(`  GET  /bounties                   List open bounties`);
+    console.log(`  POST /bounties                   Post funded bounty (auth required)`);
+    console.log(`  POST /bounties/:id/claim         Claim a bounty (auth required)`);
+    console.log(`  POST /bounties/:id/fulfill       Fulfill a bounty (auth required)`);
+    console.log(`  GET  /verifiers                  List verifiers`);
+    console.log(`  POST /verifiers                  Register verifier (auth required)`);
+    console.log(`  GET  /wallets/:ownerId           Check balance`);
+    console.log(`  POST /wallets/:ownerId/deposit   Deposit funds (auth required)`);
+    console.log(`  GET  /welcome/:agentId           Agent onboarding + free credits`);
   });
 }
