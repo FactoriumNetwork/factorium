@@ -10,6 +10,6 @@ services:
       - key: NODE_VERSION
         value: "22.0.0"
       - key: ALBY_HUB_URL
-        value: "https://owen-player-project-condo.trycloudflare.com/api"
+        value: "https://cincinnati-designers-steps-tips.trycloudflare.com/api"
       - key: ALBY_ACCESS_TOKEN
         sync: false
