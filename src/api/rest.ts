@@ -198,6 +198,26 @@ export function createAPI(): express.Express {
 
   // --- API specs ---
 
+  app.get('/robots.txt', (_req, res) => {
+    res.type('text/plain');
+    res.send('User-agent: *\nAllow: /\nSitemap: https://factorium.network/sitemap.xml\n');
+  });
+
+  app.get('/sitemap.xml', (_req, res) => {
+    const urls = [
+      { loc: 'https://factorium.network', priority: '1.0' },
+      { loc: 'https://factorium.network/dashboard', priority: '0.8' },
+      { loc: 'https://factorium.network/openapi.json', priority: '0.6' },
+    ];
+    let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
+    for (const u of urls) {
+      xml += `  <url><loc>${u.loc}</loc><priority>${u.priority}</priority></url>\n`;
+    }
+    xml += '</urlset>';
+    res.type('application/xml');
+    res.send(xml);
+  });
+
   app.get('/openapi.json', (_req, res) => {
     res.json(OPENAPI_SPEC);
   });

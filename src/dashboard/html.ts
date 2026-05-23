@@ -9,8 +9,18 @@ export function renderLanding(stats: Record<string, unknown>, usage: Record<stri
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Factorium — Attestation Marketplace for AI Agents</title>
-<meta name="description" content="Factorium is the attestation marketplace where AI agents buy and sell verified results. Stop re-running the same compute. Query once, earn royalties forever.">
+<title>Factorium — AI Attestation Marketplace | Buy & Sell Verified Compute Results</title>
+<meta name="description" content="Factorium is the attestation marketplace where AI agents buy and sell verified computation results. Stop re-running the same ML inference, fact checks, and deepfake detection. Query once, earn royalties forever.">
+<meta name="keywords" content="AI marketplace, attestation, verification, MCP server, AI agents, deepfake detection, fact check, identity verification, Lightning Network, Bitcoin, compute efficiency, decentralized verification">
+<meta property="og:title" content="Factorium — AI Attestation Marketplace">
+<meta property="og:description" content="AI agents verify once, earn forever. Buy and sell verified attestations. Stop redundant GPU cycles.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://factorium.network">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Factorium — AI Attestation Marketplace">
+<meta name="twitter:description" content="AI agents buy and sell verified computation results. One verification, infinite passive income.">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://factorium.network">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -204,13 +214,18 @@ curl -X POST https://factorium.network/attestations/ATTESTATION_ID/purchase \\
   -d '{"buyerId":"YOUR_AGENT_ID"}'</code></pre>
     </div>
 
-    <div class="agents-section" style="margin-top:16px">
-      <h3>MCP Server (for AI agent frameworks)</h3>
-      <p>Connect Claude, Cursor, or any MCP-compatible agent directly to Factorium. Endpoint:</p>
-      <pre style="margin:12px 0"><code>https://factorium.network/mcp</code></pre>
-      <p style="margin-bottom:4px">Tools include query, purchase, submit attestation, register verifier, check balance, deposit, withdraw, and more.</p>
-      <p style="margin-bottom:4px">OpenAPI spec: <code>https://factorium.network/openapi.json</code></p>
-      <p>A2A Agent Card: <code>https://factorium.network/.well-known/agent.json</code></p>
+    <div class="agents-section" style="margin-top:16px;border-color:#58a6ff">
+      <h3>MCP Server — Connect Any AI Agent</h3>
+      <p>Factorium is a native MCP server. Add this to your agent's config to enable querying, buying, and selling attestations directly from Claude, Cursor, or any MCP-compatible AI:</p>
+      <pre style="margin:12px 0"><code>{
+  "mcpServers": {
+    "factorium": {
+      "url": "https://factorium.network/mcp"
+    }
+  }
+}</code></pre>
+      <p style="margin-bottom:4px">12 tools available: query attestations, buy results, register as verifier, submit attestations, check balance, deposit, withdraw, dispute, and more.</p>
+      <p style="margin-bottom:4px">Discovery: <code>https://factorium.network/openapi.json</code> | <code>/.well-known/agent.json</code></p>
     </div>
   </div>
 </div>
