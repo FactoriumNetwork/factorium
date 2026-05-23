@@ -12,4 +12,4 @@ services:
       - key: ALBY_HUB_URL
         value: "https://views-lightning-unsubscribe-invention.trycloudflare.com/api"
       - key: ALBY_ACCESS_TOKEN
-        value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwZXJtaXNzaW9uIjoiZnVsbCIsImV4cCI6MTgxMDkwOTIxM30.-s8fnI4SsH0wKT6nlCmBljtaFzQVZjrjAosz2g_yWIA"
+        value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwZXJtaXNzaW9uIjoiZnVsbCIsImV4cCI6MTgxMTA4NzAyNX0.xGdDRJfUI8A-OKbfdtzkpAUxAYQYaTiCSg3y_6b1N_M"
