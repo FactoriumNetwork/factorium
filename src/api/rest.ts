@@ -123,6 +123,7 @@ function assertOwner(req: express.Request, claimedId: string, role: string): voi
 
 export function createAPI(): express.Express {
   const app = express();
+  app.set('trust proxy', true);
   app.use(cors());
   app.use(express.json());
 
