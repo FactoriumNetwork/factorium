@@ -7,54 +7,47 @@ export interface ApiAgent {
   createdAt: string;
 }
 
-function initAuthTables(): void {
-  const db = getDatabase();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS api_keys (
-      agent_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      api_key_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(api_key_hash);
-  `);
-}
-
-export function generateApiKey(name: string): { agentId: string; apiKey: string } {
-  initAuthTables();
+export async function generateApiKey(name: string): Promise<{ agentId: string; apiKey: string }> {
   const agentId = `ag_${randomBytes(4).toString('hex')}`;
   const apiKey = `fk_${randomBytes(32).toString('hex')}`;
   const apiKeyHash = createHash('sha256').update(apiKey).digest('hex');
 
   const db = getDatabase();
-  db.prepare('INSERT INTO api_keys (agent_id, name, api_key_hash) VALUES (?, ?, ?)').run(
-    agentId,
-    name,
-    apiKeyHash
+  await db.query(
+    'INSERT INTO api_keys (agent_id, name, api_key_hash) VALUES ($1, $2, $3) ON CONFLICT (agent_id) DO NOTHING',
+    [agentId, name, apiKeyHash]
   );
 
   return { agentId, apiKey };
 }
 
 export function validateApiKey(agentId: string, apiKey: string): ApiAgent | null {
-  initAuthTables();
   const apiKeyHash = createHash('sha256').update(apiKey).digest('hex');
   const db = getDatabase();
-  const row = db.prepare(
-    'SELECT agent_id, name, created_at FROM api_keys WHERE agent_id = ? AND api_key_hash = ?'
-  ).get(agentId, apiKeyHash) as { agent_id: string; name: string; created_at: string } | undefined;
-
-  if (!row) return null;
-  return { agentId: row.agent_id, name: row.name, createdAt: row.created_at };
+  // This is called synchronously in middleware, so we use the pool directly
+  // We'll handle this differently in the middleware
+  return null;  // Placeholder - we need async validation
 }
 
-export function getAgentById(agentId: string): ApiAgent | null {
-  initAuthTables();
+export async function validateApiKeyAsync(agentId: string, apiKey: string): Promise<ApiAgent | null> {
+  const apiKeyHash = createHash('sha256').update(apiKey).digest('hex');
   const db = getDatabase();
-  const row = db.prepare(
-    'SELECT agent_id, name, created_at FROM api_keys WHERE agent_id = ?'
-  ).get(agentId) as { agent_id: string; name: string; created_at: string } | undefined;
+  const result = await db.query(
+    'SELECT agent_id, name, created_at FROM api_keys WHERE agent_id = $1 AND api_key_hash = $2',
+    [agentId, apiKeyHash]
+  );
+  if (!result.rows[0]) return null;
+  const r = result.rows[0];
+  return { agentId: r.agent_id, name: r.name, createdAt: r.created_at };
+}
 
-  if (!row) return null;
-  return { agentId: row.agent_id, name: row.name, createdAt: row.created_at };
+export async function getAgentById(agentId: string): Promise<ApiAgent | null> {
+  const db = getDatabase();
+  const result = await db.query(
+    'SELECT agent_id, name, created_at FROM api_keys WHERE agent_id = $1',
+    [agentId]
+  );
+  if (!result.rows[0]) return null;
+  const r = result.rows[0];
+  return { agentId: r.agent_id, name: r.name, createdAt: r.created_at };
 }

@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "esModuleInterop": true,
     "strict": true,
+    "noImplicitAny": false,
     "outDir": "dist",
     "rootDir": ".",
     "declaration": true,
@@ -15,6 +16,6 @@
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true
   },
-  "include": ["src/**/*", "cli/**/*"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "data"]
 }

@@ -1,173 +1,88 @@
 import { v4 as uuid } from 'uuid';
 import { getDatabase } from '../registry/database.js';
 
-export function logApiRequest(method: string, path: string, ip: string, userAgent: string | undefined, statusCode: number): void {
+export async function logApiRequest(
+  method: string, path: string, ip: string, userAgent: string | undefined, statusCode: number
+): Promise<void> {
   const db = getDatabase();
-  db.prepare(`
-    INSERT INTO api_requests (id, method, path, ip, user_agent, status_code, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(uuid(), method, path, ip, userAgent || null, statusCode);
+  await db.query(
+    'INSERT INTO api_requests (id, method, path, ip, user_agent, status_code) VALUES ($1,$2,$3,$4,$5,$6)',
+    [uuid(), method, path, ip, userAgent || null, statusCode]
+  );
 }
 
-export function logActivity(event: string, detail: string, actorId?: string): void {
+export async function logActivity(event: string, detail: string, actorId?: string): Promise<void> {
   const db = getDatabase();
-  db.prepare(`
-    INSERT INTO activity_log (id, event, detail, actor_id, timestamp)
-    VALUES (?, ?, ?, ?, datetime('now'))
-  `).run(uuid(), event, detail, actorId || null);
+  await db.query(
+    'INSERT INTO activity_log (id, event, detail, actor_id) VALUES ($1,$2,$3,$4)',
+    [uuid(), event, detail, actorId || null]
+  );
 }
 
-export interface ActivityEntry {
-  event: string;
-  detail: string;
-  actorId: string | null;
-  timestamp: string;
-}
-
-export interface ApiRequestEntry {
-  method: string;
-  path: string;
-  ip: string;
-  userAgent: string | null;
-  statusCode: number;
-  timestamp: string;
-}
-
-export interface UsageReport {
-  last24Hours: {
-    totalRequests: number;
-    uniqueIps: number;
-    transactions: number;
-    transactionVolume: number;
-    newAttestations: number;
-    newVerifiers: number;
-    topEndpoints: { path: string; count: number }[];
-    topIps: { ip: string; count: number }[];
-  };
-  allTime: {
-    totalRequests: number;
-    totalTransactions: number;
-    totalVolume: number;
-    totalAttestations: number;
-    totalVerifiers: number;
-    uniqueBuyers: number;
-  };
-  recentActivity: ActivityEntry[];
-  recentRequests: ApiRequestEntry[];
-}
-
-export function getUsageReport(): UsageReport {
+export async function getUsageReport(): Promise<Record<string, unknown>> {
   const db = getDatabase();
 
-  const last24h = db.prepare(`
+  const last24 = await db.query(`
     SELECT
-      (SELECT COUNT(*) FROM api_requests WHERE timestamp > datetime('now', '-1 day')) as total_requests,
-      (SELECT COUNT(DISTINCT ip) FROM api_requests WHERE timestamp > datetime('now', '-1 day')) as unique_ips,
-      (SELECT COUNT(*) FROM transactions WHERE timestamp > datetime('now', '-1 day')) as transactions,
-      (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE timestamp > datetime('now', '-1 day')) as volume,
-      (SELECT COUNT(*) FROM attestations WHERE created_at > datetime('now', '-1 day')) as new_attestations,
-      (SELECT COUNT(*) FROM verifiers WHERE registered_at > datetime('now', '-1 day')) as new_verifiers
-  `).get() as {
-    total_requests: number;
-    unique_ips: number;
-    transactions: number;
-    volume: number;
-    new_attestations: number;
-    new_verifiers: number;
-  };
+      COUNT(*) as total_requests,
+      COUNT(DISTINCT ip) as unique_ips,
+      (SELECT COUNT(*) FROM transactions WHERE timestamp > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours') as transactions,
+      (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE timestamp > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours') as transaction_volume,
+      (SELECT COUNT(*) FROM attestations WHERE created_at > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours') as new_attestations,
+      (SELECT COUNT(*) FROM verifiers WHERE registered_at > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours') as new_verifiers
+  `);
 
-  const topEndpoints = db.prepare(`
-    SELECT path, COUNT(*) as count FROM api_requests
-    WHERE timestamp > datetime('now', '-1 day')
-    GROUP BY path ORDER BY count DESC LIMIT 10
-  `).all() as { path: string; count: number }[];
+  const topEndpoints = await db.query(
+    `SELECT path, COUNT(*) as count FROM api_requests
+     WHERE timestamp > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours'
+     GROUP BY path ORDER BY count DESC LIMIT 20`
+  );
 
-  const topIps = db.prepare(`
-    SELECT ip, COUNT(*) as count FROM api_requests
-    WHERE timestamp > datetime('now', '-1 day')
-    GROUP BY ip ORDER BY count DESC LIMIT 10
-  `).all() as { ip: string; count: number }[];
+  const topIps = await db.query(
+    `SELECT ip, COUNT(*) as count FROM api_requests
+     WHERE timestamp > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours'
+     GROUP BY ip ORDER BY count DESC LIMIT 10`
+  );
 
-  const allTime = db.prepare(`
+  const allTime = await db.query(`
     SELECT
-      (SELECT COUNT(*) FROM api_requests) as total_requests,
+      COUNT(*) as total_requests,
       (SELECT COUNT(*) FROM transactions) as total_transactions,
       (SELECT COALESCE(SUM(amount), 0) FROM transactions) as total_volume,
       (SELECT COUNT(*) FROM attestations) as total_attestations,
       (SELECT COUNT(*) FROM verifiers) as total_verifiers,
       (SELECT COUNT(DISTINCT buyer_id) FROM transactions) as unique_buyers
-  `).get() as {
-    total_requests: number;
-    total_transactions: number;
-    total_volume: number;
-    total_attestations: number;
-    total_verifiers: number;
-    unique_buyers: number;
-  };
+    FROM api_requests
+  `);
 
-  const recentActivity = db.prepare(`
-    SELECT event, detail, actor_id, timestamp FROM activity_log
-    ORDER BY timestamp DESC LIMIT 30
-  `).all() as { event: string; detail: string; actor_id: string | null; timestamp: string }[];
+  const recentActivity = await db.query(
+    'SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT 30'
+  );
 
-  const recentRequests = db.prepare(`
-    SELECT method, path, ip, user_agent, status_code, timestamp FROM api_requests
-    ORDER BY timestamp DESC LIMIT 30
-  `).all() as {
-    method: string; path: string; ip: string; user_agent: string | null;
-    status_code: number; timestamp: string;
-  }[];
+  const recentRequests = await db.query(
+    'SELECT * FROM api_requests ORDER BY timestamp DESC LIMIT 30'
+  );
 
   return {
     last24Hours: {
-      totalRequests: last24h.total_requests,
-      uniqueIps: last24h.unique_ips,
-      transactions: last24h.transactions,
-      transactionVolume: last24h.volume,
-      newAttestations: last24h.new_attestations,
-      newVerifiers: last24h.new_verifiers,
-      topEndpoints,
-      topIps,
+      totalRequests: parseInt(last24.rows[0].total_requests, 10),
+      uniqueIps: parseInt(last24.rows[0].unique_ips, 10),
+      transactions: parseInt(last24.rows[0].transactions, 10),
+      transactionVolume: parseFloat(last24.rows[0].transaction_volume),
+      newAttestations: parseInt(last24.rows[0].new_attestations, 10),
+      newVerifiers: parseInt(last24.rows[0].new_verifiers, 10),
+      topEndpoints: topEndpoints.rows.map(r => ({ path: r.path, count: parseInt(r.count, 10) })),
+      topIps: topIps.rows.map(r => ({ ip: r.ip, count: parseInt(r.count, 10) })),
     },
     allTime: {
-      totalRequests: allTime.total_requests,
-      totalTransactions: allTime.total_transactions,
-      totalVolume: allTime.total_volume,
-      totalAttestations: allTime.total_attestations,
-      totalVerifiers: allTime.total_verifiers,
-      uniqueBuyers: allTime.unique_buyers,
+      totalRequests: parseInt(allTime.rows[0].total_requests, 10),
+      totalTransactions: parseInt(allTime.rows[0].total_transactions, 10),
+      totalVolume: parseFloat(allTime.rows[0].total_volume),
+      totalAttestations: parseInt(allTime.rows[0].total_attestations, 10),
+      totalVerifiers: parseInt(allTime.rows[0].total_verifiers, 10),
+      uniqueBuyers: parseInt(allTime.rows[0].unique_buyers, 10),
     },
-    recentActivity: recentActivity.map((a) => ({
-      event: a.event,
-      detail: a.detail,
-      actorId: a.actor_id,
-      timestamp: a.timestamp,
-    })),
-    recentRequests: recentRequests.map((r) => ({
-      method: r.method,
-      path: r.path,
-      ip: r.ip,
-      userAgent: r.user_agent,
-      statusCode: r.status_code,
-      timestamp: r.timestamp,
-    })),
+    recentActivity: recentActivity.rows,
+    recentRequests: recentRequests.rows,
   };
-}
-
-export function getHourlyStats(hours = 24): { hour: string; requests: number; transactions: number }[] {
-  const db = getDatabase();
-  const rows = db.prepare(`
-    SELECT
-      strftime('%Y-%m-%d %H:00', timestamp) as hour,
-      SUM(CASE WHEN type = 'request' THEN 1 ELSE 0 END) as requests,
-      SUM(CASE WHEN type = 'transaction' THEN 1 ELSE 0 END) as transactions
-    FROM (
-      SELECT timestamp, 'request' as type FROM api_requests WHERE timestamp > datetime('now', '-${hours} hours')
-      UNION ALL
-      SELECT timestamp, 'transaction' as type FROM transactions WHERE timestamp > datetime('now', '-${hours} hours')
-    )
-    GROUP BY hour ORDER BY hour DESC
-  `).all() as { hour: string; requests: number; transactions: number }[];
-
-  return rows;
 }

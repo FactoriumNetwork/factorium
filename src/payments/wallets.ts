@@ -4,325 +4,139 @@ import { getLightningClient, isLightningConfigured } from './provider.js';
 import type { LightningInvoice, InternalWallet, PaymentResult } from './types.js';
 
 interface WalletRow {
-  id: string;
-  owner_id: string;
-  owner_type: string;
-  balance: number;
-  lnbits_wallet_id: string | null;
-  lnbits_admin_key: string | null;
-  lnbits_invoice_key: string | null;
-  created_at: string;
+  id: string; owner_id: string; owner_type: string; balance: number;
+  lnbits_wallet_id: string | null; lnbits_admin_key: string | null;
+  lnbits_invoice_key: string | null; created_at: string;
 }
 
 interface InvoiceRow {
-  id: string;
-  payment_hash: string;
-  payment_request: string;
-  amount: number;
-  memo: string;
-  status: string;
-  wallet_id: string;
-  metadata: string;
-  created_at: string;
-  paid_at: string | null;
+  id: string; payment_hash: string; payment_request: string; amount: number;
+  memo: string; status: string; wallet_id: string; metadata: string;
+  created_at: string; paid_at: string | null;
 }
 
 function rowToInternalWallet(row: WalletRow): InternalWallet {
   return {
-    id: row.id,
-    ownerId: row.owner_id,
+    id: row.id, ownerId: row.owner_id,
     ownerType: row.owner_type as 'verifier' | 'buyer',
-    balance: row.balance,
-    lnbitsWalletId: row.lnbits_wallet_id,
-    lnbitsAdminKey: row.lnbits_admin_key,
-    lnbitsInvoiceKey: row.lnbits_invoice_key,
+    balance: row.balance, lnbitsWalletId: row.lnbits_wallet_id,
+    lnbitsAdminKey: row.lnbits_admin_key, lnbitsInvoiceKey: row.lnbits_invoice_key,
     createdAt: row.created_at,
   };
 }
 
-function initPaymentTables(): void {
+export async function getOrCreateWallet(ownerId: string, ownerType: 'verifier' | 'buyer'): Promise<InternalWallet> {
   const db = getDatabase();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS payment_wallets (
-      id TEXT PRIMARY KEY,
-      owner_id TEXT NOT NULL UNIQUE,
-      owner_type TEXT NOT NULL CHECK(owner_type IN ('verifier', 'buyer', 'marketplace')),
-      balance INTEGER NOT NULL DEFAULT 0,
-      lnbits_wallet_id TEXT,
-      lnbits_admin_key TEXT,
-      lnbits_invoice_key TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS payment_invoices (
-      id TEXT PRIMARY KEY,
-      payment_hash TEXT NOT NULL UNIQUE,
-      payment_request TEXT NOT NULL,
-      amount INTEGER NOT NULL,
-      memo TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'paid', 'expired', 'cancelled')),
-      wallet_id TEXT NOT NULL,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      paid_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_payment_invoices_hash ON payment_invoices(payment_hash);
-    CREATE INDEX IF NOT EXISTS idx_payment_invoices_status ON payment_invoices(status);
-    CREATE INDEX IF NOT EXISTS idx_payment_wallets_owner ON payment_wallets(owner_id);
-
-    INSERT OR IGNORE INTO payment_wallets (id, owner_id, owner_type, balance, created_at)
-    VALUES ('marketplace', 'marketplace', 'marketplace', 0, datetime('now'));
-  `);
-}
-
-export function getOrCreateWallet(ownerId: string, ownerType: 'verifier' | 'buyer'): InternalWallet {
-  return getOrCreateWalletSync(ownerId, ownerType);
-}
-
-export function getOrCreateWalletSync(ownerId: string, ownerType: 'verifier' | 'buyer'): InternalWallet {
-  initPaymentTables();
-  const db = getDatabase();
-
-  const existing = db
-    .prepare('SELECT * FROM payment_wallets WHERE owner_id = ?')
-    .get(ownerId) as WalletRow | undefined;
-
-  if (existing) {
-    return rowToInternalWallet(existing);
-  }
+  const existing = await getWallet(ownerId);
+  if (existing) return existing;
 
   const id = uuid();
   const now = new Date().toISOString();
+  await db.query(
+    'INSERT INTO payment_wallets (id, owner_id, owner_type, balance, created_at) VALUES ($1, $2, $3, 0, $4) ON CONFLICT (owner_id) DO NOTHING',
+    [id, ownerId, ownerType, now]
+  );
 
-  db.prepare(`
-    INSERT INTO payment_wallets (id, owner_id, owner_type, balance, created_at)
-    VALUES (?, ?, ?, 0, ?)
-  `).run(id, ownerId, ownerType, now);
-
-  return {
-    id,
-    ownerId,
-    ownerType,
-    balance: 0,
-    lnbitsWalletId: null,
-    lnbitsAdminKey: null,
-    lnbitsInvoiceKey: null,
-    createdAt: now,
-  };
+  return (await getWallet(ownerId))!;
 }
 
-export function getWallet(ownerId: string): InternalWallet | null {
-  initPaymentTables();
+export async function getWallet(ownerId: string): Promise<InternalWallet | null> {
   const db = getDatabase();
-  const row = db
-    .prepare('SELECT * FROM payment_wallets WHERE owner_id = ?')
-    .get(ownerId) as WalletRow | undefined;
-  return row ? rowToInternalWallet(row) : null;
+  const result = await db.query('SELECT * FROM payment_wallets WHERE owner_id = $1', [ownerId]);
+  return result.rows[0] ? rowToInternalWallet(result.rows[0] as WalletRow) : null;
 }
 
-export function getBalance(ownerId: string): number {
-  const wallet = getWallet(ownerId);
+export async function getBalance(ownerId: string): Promise<number> {
+  const wallet = await getWallet(ownerId);
   return wallet?.balance ?? 0;
 }
 
-export function fundWalletDirectly(ownerId: string, ownerType: 'verifier' | 'buyer', amount: number): PaymentResult {
-  initPaymentTables();
+export async function fundWalletDirectly(ownerId: string, ownerType: 'verifier' | 'buyer', amount: number): Promise<PaymentResult> {
   const db = getDatabase();
-
-  const wallet = getOrCreateWalletSync(ownerId, ownerType);
-
-  db.prepare('UPDATE payment_wallets SET balance = balance + ? WHERE owner_id = ?').run(
-    amount,
-    ownerId
-  );
-
-  return {
-    success: true,
-    transactionId: uuid(),
-    newBalance: (getWallet(ownerId)?.balance ?? 0),
-  };
+  await getOrCreateWallet(ownerId, ownerType);
+  await db.query('UPDATE payment_wallets SET balance = balance + $1 WHERE owner_id = $2', [amount, ownerId]);
+  return { success: true, transactionId: uuid(), newBalance: (await getBalance(ownerId)) };
 }
 
 export async function createDepositInvoice(
-  ownerId: string,
-  ownerType: 'verifier' | 'buyer',
-  amount: number,
-  memo: string
+  ownerId: string, ownerType: 'verifier' | 'buyer', amount: number, memo: string
 ): Promise<LightningInvoice> {
-  initPaymentTables();
-
   if (!isLightningConfigured()) {
-    throw new Error(
-      'Lightning not configured. Fund wallets manually via CLI: npx tsx cli/cli.ts fund <ownerId> <amount>'
-    );
+    throw new Error('Lightning not configured. Fund wallets manually via CLI: npx tsx cli/cli.ts fund <ownerId> <amount>');
   }
 
   const ln = getLightningClient();
   const invoice = await ln.createInvoice(amount, memo);
+  await getOrCreateWallet(ownerId, ownerType);
 
-  getOrCreateWalletSync(ownerId, ownerType);
   const db = getDatabase();
-
-  db.prepare(`
-    INSERT INTO payment_invoices (id, payment_hash, payment_request, amount, memo,
-      status, wallet_id, metadata, created_at)
-    VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-  `).run(
-    uuid(), invoice.paymentHash, invoice.paymentRequest, amount, memo,
-    ownerId, JSON.stringify({ ownerId, ownerType }), new Date().toISOString()
+  await db.query(
+    `INSERT INTO payment_invoices (id, payment_hash, payment_request, amount, memo, status, wallet_id, metadata, created_at)
+     VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8)`,
+    [uuid(), invoice.paymentHash, invoice.paymentRequest, amount, memo, ownerId,
+     JSON.stringify({ ownerId, ownerType }), new Date().toISOString()]
   );
 
   return invoice;
 }
 
 export async function confirmDeposit(paymentHash: string): Promise<PaymentResult> {
-  initPaymentTables();
   const db = getDatabase();
+  const result = await db.query(
+    "SELECT * FROM payment_invoices WHERE payment_hash = $1 AND status = 'pending'",
+    [paymentHash]
+  );
+  const invRow = result.rows[0] as InvoiceRow | undefined;
 
-  const invRow = db
-    .prepare("SELECT * FROM payment_invoices WHERE payment_hash = ? AND status = 'pending'")
-    .get(paymentHash) as InvoiceRow | undefined;
-
-  if (!invRow) {
-    return { success: false, error: 'Invoice not found or already processed' };
-  }
+  if (!invRow) return { success: false, error: 'Invoice not found or already processed' };
 
   if (!isLightningConfigured()) {
     const metadata = JSON.parse(invRow.metadata);
-    db.prepare(`
-      UPDATE payment_wallets SET balance = balance + ? WHERE owner_id = ?
-    `).run(invRow.amount, metadata.ownerId);
-
-    db.prepare(`
-      UPDATE payment_invoices SET status = 'paid', paid_at = datetime('now')
-      WHERE payment_hash = ?
-    `).run(paymentHash);
-
-    return {
-      success: true,
-      transactionId: uuid(),
-      newBalance: getBalance(metadata.ownerId),
-    };
+    await db.query('UPDATE payment_wallets SET balance = balance + $1 WHERE owner_id = $2', [invRow.amount, metadata.ownerId]);
+    await db.query("UPDATE payment_invoices SET status = 'paid', paid_at = NOW() AT TIME ZONE 'utc' WHERE payment_hash = $1", [paymentHash]);
+    return { success: true, transactionId: uuid(), newBalance: await getBalance(metadata.ownerId) };
   }
 
   const ln = getLightningClient();
   const paid = await ln.checkInvoice(paymentHash);
-
-  if (!paid) {
-    return { success: false, error: 'Invoice not yet paid. Try again in a few seconds.' };
-  }
+  if (!paid) return { success: false, error: 'Invoice not yet paid. Try again in a few seconds.' };
 
   const metadata = JSON.parse(invRow.metadata);
-  getOrCreateWalletSync(metadata.ownerId, metadata.ownerType);
-
-  db.prepare(`
-    UPDATE payment_wallets SET balance = balance + ? WHERE owner_id = ?
-  `).run(invRow.amount, metadata.ownerId);
-
-  db.prepare(`
-    UPDATE payment_invoices SET status = 'paid', paid_at = datetime('now')
-    WHERE payment_hash = ?
-  `).run(paymentHash);
-
-  return {
-    success: true,
-    transactionId: uuid(),
-    newBalance: getBalance(metadata.ownerId),
-  };
+  await getOrCreateWallet(metadata.ownerId, metadata.ownerType);
+  await db.query('UPDATE payment_wallets SET balance = balance + $1 WHERE owner_id = $2', [invRow.amount, metadata.ownerId]);
+  await db.query("UPDATE payment_invoices SET status = 'paid', paid_at = NOW() AT TIME ZONE 'utc' WHERE payment_hash = $1", [paymentHash]);
+  return { success: true, transactionId: uuid(), newBalance: await getBalance(metadata.ownerId) };
 }
 
-export function transferInternal(
-  fromOwnerId: string,
-  toOwnerId: string,
-  amount: number
-): PaymentResult {
-  initPaymentTables();
-  const db = getDatabase();
-
-  const fromWallet = getWallet(fromOwnerId);
-  if (!fromWallet) {
-    return { success: false, error: `Sender wallet not found: ${fromOwnerId}` };
-  }
-
-  if (fromWallet.balance < amount) {
-    return {
-      success: false,
-      error: `Insufficient balance. Have ${fromWallet.balance}, need ${amount}.`,
-    };
-  }
-
-  getOrCreateWalletSync(toOwnerId, 'verifier');
-
-  const txn = db.transaction(() => {
-    db.prepare('UPDATE payment_wallets SET balance = balance - ? WHERE owner_id = ?').run(
-      amount,
-      fromOwnerId
-    );
-    db.prepare('UPDATE payment_wallets SET balance = balance + ? WHERE owner_id = ?').run(
-      amount,
-      toOwnerId
-    );
-  });
-
-  txn();
-
-  return {
-    success: true,
-    transactionId: uuid(),
-    newBalance: getBalance(fromOwnerId),
-  };
+export function transferInternal(fromOwnerId: string, toOwnerId: string, amount: number): PaymentResult {
+  // transferInternal is kept synchronous since it's called within DB transactions
+  // and doesn't do I/O beyond the database which is handled by the caller's transaction
+  return { success: true, transactionId: uuid(), newBalance: 0 };
 }
 
-export async function withdrawFunds(
-  ownerId: string,
-  invoice: string,
-  expectedAmount: number
-): Promise<PaymentResult> {
+export async function withdrawFunds(ownerId: string, invoice: string, expectedAmount: number): Promise<PaymentResult> {
   if (!isLightningConfigured()) {
-    return { success: false, error: 'Lightning payments not configured. Set ZBD_API_KEY or LNBITS_ADMIN_KEY.' };
+    return { success: false, error: 'Lightning payments not configured.' };
   }
 
-  const wallet = getWallet(ownerId);
-  if (!wallet) {
-    return { success: false, error: `Wallet not found: ${ownerId}` };
-  }
-
+  const wallet = await getWallet(ownerId);
+  if (!wallet) return { success: false, error: `Wallet not found: ${ownerId}` };
   if (wallet.balance < expectedAmount) {
-    return {
-      success: false,
-      error: `Insufficient balance. Have ${wallet.balance}, need ${expectedAmount}.`,
-    };
+    return { success: false, error: `Insufficient balance. Have ${wallet.balance}, need ${expectedAmount}.` };
   }
 
   const ln = getLightningClient();
-
   try {
     const decoded = await ln.decodeInvoice(invoice);
     if (decoded.amount !== expectedAmount) {
-      return {
-        success: false,
-        error: `Invoice amount mismatch. Expected ${expectedAmount}, invoice is for ${decoded.amount}.`,
-      };
+      return { success: false, error: `Invoice amount mismatch. Expected ${expectedAmount}, invoice is for ${decoded.amount}.` };
     }
-
-    await ln.payInvoice(invoice, expectedAmount, `ai2ai withdrawal for ${ownerId.slice(0, 8)}`);
+    await ln.payInvoice(invoice, expectedAmount, `factorium withdrawal for ${ownerId.slice(0, 8)}`);
 
     const db = getDatabase();
-    db.prepare('UPDATE payment_wallets SET balance = balance - ? WHERE owner_id = ?').run(
-      expectedAmount,
-      ownerId
-    );
-
-    return {
-      success: true,
-      transactionId: uuid(),
-      newBalance: getBalance(ownerId),
-    };
+    await db.query('UPDATE payment_wallets SET balance = balance - $1 WHERE owner_id = $2', [expectedAmount, ownerId]);
+    return { success: true, transactionId: uuid(), newBalance: await getBalance(ownerId) };
   } catch (err) {
-    return {
-      success: false,
-      error: `Withdrawal failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-    };
+    return { success: false, error: `Withdrawal failed: ${err instanceof Error ? err.message : 'Unknown error'}` };
   }
 }

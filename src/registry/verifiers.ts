@@ -1,6 +1,5 @@
 import { v4 as uuid } from 'uuid';
 import { getDatabase } from './database.js';
-import { getOrCreateWallet } from '../payments/wallets.js';
 import type { Verifier, StakingEvent } from '../types/index.js';
 
 interface VerifierRow {
@@ -33,175 +32,132 @@ function rowToVerifier(row: VerifierRow): Verifier {
   };
 }
 
-export function registerVerifier(params: {
+export async function registerVerifier(params: {
   name: string;
   endpoint: string;
   publicKey: string;
   initialStake: number;
   id?: string;
-}): Verifier {
+}): Promise<Verifier> {
   const db = getDatabase();
   const id = params.id || uuid();
   const now = new Date().toISOString();
 
-  db.prepare(`
-    INSERT INTO verifiers (id, name, endpoint, public_key, staked_amount,
-      registered_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, params.name, params.endpoint, params.publicKey, params.initialStake, now);
+  await db.query(
+    'INSERT INTO verifiers (id, name, endpoint, public_key, staked_amount, registered_at) VALUES ($1, $2, $3, $4, $5, $6)',
+    [id, params.name, params.endpoint, params.publicKey, params.initialStake, now]
+  );
 
-  logStakingEvent(id, params.initialStake, 'stake', 'Initial verifier stake');
+  await logStakingEvent(id, params.initialStake, 'stake', 'Initial verifier stake');
 
-  getOrCreateWallet(id, 'verifier');
-
-  return getVerifier(id)!;
+  return (await getVerifier(id))!;
 }
 
-export function getVerifier(id: string): Verifier | null {
+export async function getVerifier(id: string): Promise<Verifier | null> {
   const db = getDatabase();
-  const row = db.prepare('SELECT * FROM verifiers WHERE id = ?').get(id) as
-    | VerifierRow
-    | undefined;
+  const result = await db.query('SELECT * FROM verifiers WHERE id = $1', [id]);
+  const row = result.rows[0] as VerifierRow | undefined;
   return row ? rowToVerifier(row) : null;
 }
 
-export function listVerifiers(activeOnly = true): Verifier[] {
+export async function listVerifiers(activeOnly = true): Promise<Verifier[]> {
   const db = getDatabase();
   const query = activeOnly
     ? 'SELECT * FROM verifiers WHERE active = 1 ORDER BY reputation_score DESC'
     : 'SELECT * FROM verifiers ORDER BY reputation_score DESC';
-  const rows = db.prepare(query).all() as VerifierRow[];
-  return rows.map(rowToVerifier);
+  const result = await db.query(query);
+  return result.rows.map(r => rowToVerifier(r as VerifierRow));
 }
 
-export function stake(verifierId: string, amount: number): Verifier {
+export async function stake(verifierId: string, amount: number): Promise<Verifier> {
   const db = getDatabase();
-  const verifier = getVerifier(verifierId);
+  const verifier = await getVerifier(verifierId);
   if (!verifier) throw new Error(`Verifier not found: ${verifierId}`);
   if (!verifier.active) throw new Error(`Verifier is inactive: ${verifierId}`);
 
-  db.prepare('UPDATE verifiers SET staked_amount = staked_amount + ? WHERE id = ?').run(
-    amount,
-    verifierId
-  );
-
-  logStakingEvent(verifierId, amount, 'stake', 'Additional stake');
-  return getVerifier(verifierId)!;
+  await db.query('UPDATE verifiers SET staked_amount = staked_amount + $1 WHERE id = $2', [amount, verifierId]);
+  await logStakingEvent(verifierId, amount, 'stake', 'Additional stake');
+  return (await getVerifier(verifierId))!;
 }
 
-export function unstake(verifierId: string, amount: number): Verifier {
+export async function unstake(verifierId: string, amount: number): Promise<Verifier> {
   const db = getDatabase();
-  const verifier = getVerifier(verifierId);
+  const verifier = await getVerifier(verifierId);
   if (!verifier) throw new Error(`Verifier not found: ${verifierId}`);
-
   if (verifier.stakedAmount - amount < 0) {
-    throw new Error(
-      `Insufficient stake. Current: ${verifier.stakedAmount}, requested: ${amount}`
-    );
+    throw new Error(`Insufficient stake. Current: ${verifier.stakedAmount}, requested: ${amount}`);
   }
 
-  db.prepare('UPDATE verifiers SET staked_amount = staked_amount - ? WHERE id = ?').run(
-    amount,
-    verifierId
-  );
-
-  logStakingEvent(verifierId, amount, 'unstake', 'Unstake requested');
-  return getVerifier(verifierId)!;
+  await db.query('UPDATE verifiers SET staked_amount = staked_amount - $1 WHERE id = $2', [amount, verifierId]);
+  await logStakingEvent(verifierId, amount, 'unstake', 'Unstake requested');
+  return (await getVerifier(verifierId))!;
 }
 
-export function slash(verifierId: string, amount: number, reason: string): Verifier {
+export async function slash(verifierId: string, amount: number, reason: string): Promise<Verifier> {
   const db = getDatabase();
-  const verifier = getVerifier(verifierId);
+  const verifier = await getVerifier(verifierId);
   if (!verifier) throw new Error(`Verifier not found: ${verifierId}`);
 
   const slashAmount = Math.min(amount, verifier.stakedAmount);
-
-  db.prepare('UPDATE verifiers SET staked_amount = staked_amount - ? WHERE id = ?').run(
-    slashAmount,
-    verifierId
+  await db.query('UPDATE verifiers SET staked_amount = staked_amount - $1 WHERE id = $2', [slashAmount, verifierId]);
+  await db.query(
+    'UPDATE verifiers SET reputation_score = GREATEST(0, reputation_score - 10.0), active = CASE WHEN staked_amount <= 0 THEN 0 ELSE active END WHERE id = $1',
+    [verifierId]
   );
-
-  db.prepare(`
-    UPDATE verifiers
-    SET reputation_score = MAX(0, reputation_score - 10.0),
-        active = CASE WHEN staked_amount <= 0 THEN 0 ELSE active END
-    WHERE id = ?
-  `).run(verifierId);
-
-  logStakingEvent(verifierId, slashAmount, 'slash', reason);
-  return getVerifier(verifierId)!;
+  await logStakingEvent(verifierId, slashAmount, 'slash', reason);
+  return (await getVerifier(verifierId))!;
 }
 
-export function updateReputation(
-  verifierId: string,
-  delta: number
-): Verifier {
+export async function updateReputation(verifierId: string, delta: number): Promise<Verifier> {
   const db = getDatabase();
-  db.prepare(`
-    UPDATE verifiers
-    SET reputation_score = MAX(0, MIN(1000, reputation_score + ?))
-    WHERE id = ?
-  `).run(delta, verifierId);
-
-  return getVerifier(verifierId)!;
+  await db.query(
+    'UPDATE verifiers SET reputation_score = GREATEST(0, LEAST(1000, reputation_score + $1)) WHERE id = $2',
+    [delta, verifierId]
+  );
+  return (await getVerifier(verifierId))!;
 }
 
-export function deactivateVerifier(verifierId: string): Verifier {
+export async function deactivateVerifier(verifierId: string): Promise<Verifier> {
   const db = getDatabase();
-  db.prepare('UPDATE verifiers SET active = 0 WHERE id = ?').run(verifierId);
-  return getVerifier(verifierId)!;
+  await db.query('UPDATE verifiers SET active = 0 WHERE id = $1', [verifierId]);
+  return (await getVerifier(verifierId))!;
 }
 
-export function activateVerifier(verifierId: string): Verifier {
+export async function activateVerifier(verifierId: string): Promise<Verifier> {
   const db = getDatabase();
-  db.prepare('UPDATE verifiers SET active = 1 WHERE id = ?').run(verifierId);
-  return getVerifier(verifierId)!;
+  await db.query('UPDATE verifiers SET active = 1 WHERE id = $1', [verifierId]);
+  return (await getVerifier(verifierId))!;
 }
 
-function logStakingEvent(
-  verifierId: string,
-  amount: number,
-  action: 'stake' | 'unstake' | 'slash',
-  reason: string
-): void {
+async function logStakingEvent(verifierId: string, amount: number, action: 'stake' | 'unstake' | 'slash', reason: string): Promise<void> {
   const db = getDatabase();
-  db.prepare(`
-    INSERT INTO staking_events (id, verifier_id, amount, action, reason)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(uuid(), verifierId, amount, action, reason);
+  await db.query(
+    'INSERT INTO staking_events (id, verifier_id, amount, action, reason) VALUES ($1, $2, $3, $4, $5)',
+    [uuid(), verifierId, amount, action, reason]
+  );
 }
 
-export function getStakingHistory(verifierId: string): StakingEvent[] {
+export async function getStakingHistory(verifierId: string): Promise<StakingEvent[]> {
   const db = getDatabase();
-  const rows = db
-    .prepare(
-      'SELECT * FROM staking_events WHERE verifier_id = ? ORDER BY timestamp DESC'
-    )
-    .all(verifierId) as {
-    id: string;
-    verifier_id: string;
-    amount: number;
-    action: 'stake' | 'unstake' | 'slash';
-    reason: string;
-    timestamp: string;
-  }[];
-
-  return rows.map((r) => ({
+  const result = await db.query(
+    'SELECT * FROM staking_events WHERE verifier_id = $1 ORDER BY timestamp DESC',
+    [verifierId]
+  );
+  return result.rows.map(r => ({
     id: r.id,
     verifierId: r.verifier_id,
     amount: r.amount,
-    action: r.action,
+    action: r.action as 'stake' | 'unstake' | 'slash',
     reason: r.reason,
     timestamp: r.timestamp,
   }));
 }
 
-export function getTopVerifiers(limit = 10): Verifier[] {
+export async function getTopVerifiers(limit = 10): Promise<Verifier[]> {
   const db = getDatabase();
-  const rows = db
-    .prepare(
-      'SELECT * FROM verifiers WHERE active = 1 ORDER BY reputation_score DESC LIMIT ?'
-    )
-    .all(limit) as VerifierRow[];
-  return rows.map(rowToVerifier);
+  const result = await db.query(
+    'SELECT * FROM verifiers WHERE active = 1 ORDER BY reputation_score DESC LIMIT $1',
+    [limit]
+  );
+  return result.rows.map(r => rowToVerifier(r as VerifierRow));
 }

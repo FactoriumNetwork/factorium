@@ -330,7 +330,7 @@ function createServer(): Server {
         }
         case 'buy_attestation': {
           const { attestationId, buyerId } = args as { attestationId: string; buyerId: string };
-          const result = purchaseAttestation(attestationId, buyerId);
+          const result = await purchaseAttestation(attestationId, buyerId);
           return {
             content: [{
               type: 'text',
@@ -344,24 +344,24 @@ function createServer(): Server {
         }
         case 'register_verifier': {
           const validated = VerifierRegistrationSchema.parse(args ?? {});
-          const verifier = registerVerifier(validated);
+          const verifier = await registerVerifier(validated);
           return { content: [{ type: 'text', text: JSON.stringify(verifier, null, 2) }] };
         }
         case 'submit_attestation': {
           const validated = AttestationSubmissionSchema.parse(args ?? {});
           const { verifierId, ...rest } = validated;
-          const verifier = getVerifier(verifierId);
+          const verifier = await getVerifier(verifierId);
           if (!verifier) throw new Error(`Verifier not found: ${verifierId}`);
           if (!verifier.active) throw new Error(`Verifier is inactive: ${verifierId}`);
           if (verifier.stakedAmount < validated.price * 10) {
             throw new Error(`Insufficient stake. Need ${validated.price * 10}, have ${verifier.stakedAmount}.`);
           }
-          const attestation = submitAttestation({ ...rest, verifierId });
+          const attestation = await submitAttestation({ ...rest, verifierId });
           return { content: [{ type: 'text', text: JSON.stringify(attestation, null, 2) }] };
         }
         case 'check_verifier_reputation': {
           const { verifierId } = args as { verifierId: string };
-          const verifier = getVerifier(verifierId);
+          const verifier = await getVerifier(verifierId);
           if (!verifier) {
             return { content: [{ type: 'text', text: JSON.stringify({ error: `Verifier not found: ${verifierId}` }) }] };
           }
@@ -385,12 +385,12 @@ function createServer(): Server {
         }
         case 'list_verifiers': {
           const { limit } = (args ?? {}) as { limit?: number };
-          const verifiers = listVerifiers(true).slice(0, limit || 50);
+          const verifiers = (await listVerifiers(true)).slice(0, limit || 50);
           return { content: [{ type: 'text', text: JSON.stringify(verifiers, null, 2) }] };
         }
         case 'dispute_attestation': {
           const validated = DisputeSchema.parse(args ?? {});
-          const updated = disputeAttestation(validated.attestationId, validated.reason);
+          const updated = await disputeAttestation(validated.attestationId, validated.reason);
           return { content: [{ type: 'text', text: JSON.stringify({ message: 'Dispute filed', attestation: updated }, null, 2) }] };
         }
         case 'get_marketplace_stats': {
@@ -420,7 +420,7 @@ function createServer(): Server {
         }
         case 'check_balance': {
           const { ownerId } = args as { ownerId: string };
-          const wallet = getWallet(ownerId);
+          const wallet = await getWallet(ownerId);
           if (!wallet) {
             getOrCreateWallet(ownerId, 'buyer');
             return {
