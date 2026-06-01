@@ -13,9 +13,10 @@ export function getDatabase(): pg.Pool {
 
     pool = new Pool({
       connectionString,
-      max: 10,
+      max: 5,
       idleTimeoutMillis: 30000,
-      ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false },
+      ssl: { rejectUnauthorized: false },
+      statement_timeout: 10000,
     });
 
     pool.on('error', (err) => {

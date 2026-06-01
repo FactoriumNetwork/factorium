@@ -12,6 +12,6 @@ services:
       - key: ALBY_HUB_URL
         value: "https://views-lightning-unsubscribe-invention.trycloudflare.com/api"
       - key: DATABASE_URL
-        value: "postgresql://postgres:TheSpud4Dogs!@db.vmtftruiigxzecraqwoy.supabase.co:5432/postgres"
+        value: "postgresql://postgres:TheSpud4Dogs%21@db.vmtftruiigxzecraqwoy.supabase.co:6543/postgres?pgbouncer=true"
       - key: ALBY_ACCESS_TOKEN
         value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwZXJtaXNzaW9uIjoiZnVsbCIsImV4cCI6MTgxMTA4NzAyNX0.xGdDRJfUI8A-OKbfdtzkpAUxAYQYaTiCSg3y_6b1N_M"

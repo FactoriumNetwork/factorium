@@ -117,6 +117,7 @@ export function createAPI(): express.Express {
       const usage = await getUsageReport();
       const bounties = await listOpenBounties(undefined, 100);
       res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.send(renderLanding(stats as unknown as Record<string, unknown>, usage as unknown as Record<string, unknown>, bounties.length));
     } catch (err) {
       res.status(500).send(String(err));
