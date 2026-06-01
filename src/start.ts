@@ -7,8 +7,11 @@ async function seedDatabase(): Promise<void> {
   await initDatabase();
 
   const db = getDatabase();
-  const existing = await db.query('SELECT COUNT(*) as count FROM verifiers');
-  if (parseInt(existing.rows[0].count, 10) > 0) {
+  const seeded = await db.query("SELECT COUNT(*) as count FROM verifiers");
+
+  if (parseInt(seeded.rows[0].count, 10) > 0) {
+    // Only seed once — after that, auto-seeder handles daily fresh data
+    console.log(`Database already has ${seeded.rows[0].count} verifiers, skipping seed`);
     return;
   }
 
