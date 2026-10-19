@@ -30,26 +30,32 @@ export function hashSubject(subject: string): string {
 
 export async function submitAttestation(params: {
   type: AttestationType; subject: string; result: string; resultSummary: string;
-  confidence: number; verifierId: string; price: number; royaltyPerAccess: number;
+  confidence: number; verifierId: string; signature: string; price: number; royaltyPerAccess: number;
   expiresInSeconds: number | null; metadata: Record<string, unknown>;
 }): Promise<Attestation> {
   const db = getDatabase();
   const id = uuid();
   const now = new Date().toISOString();
   const subjectHash = hashSubject(params.subject);
-  const signature = `sig:${params.verifierId}:${subjectHash.slice(0, 32)}`;
   const expiresAt = params.expiresInSeconds
     ? new Date(Date.now() + params.expiresInSeconds * 1000).toISOString()
     : null;
 
-  await db.query(
-    `INSERT INTO attestations (id, type, subject, subject_hash, result, result_summary, confidence,
-      verifier_id, verifier_signature, price, royalty_per_access, created_at, expires_at, metadata)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-    [id, params.type, params.subject, subjectHash, params.result, params.resultSummary,
-     params.confidence, params.verifierId, signature, params.price, params.royaltyPerAccess,
-     now, expiresAt, JSON.stringify(params.metadata)]
-  );
+  try {
+    await db.query(
+      `INSERT INTO attestations (id, type, subject, subject_hash, result, result_summary, confidence,
+        verifier_id, verifier_signature, price, royalty_per_access, created_at, expires_at, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [id, params.type, params.subject, subjectHash, params.result, params.resultSummary,
+       params.confidence, params.verifierId, params.signature, params.price, params.royaltyPerAccess,
+       now, expiresAt, JSON.stringify(params.metadata)]
+    );
+  } catch (err) {
+    if ((err as { code?: string }).code === '23505') {
+      throw new Error(`Attestation already exists for this subject and verifier (${params.verifierId})`);
+    }
+    throw err;
+  }
 
   await db.query(
     'UPDATE verifiers SET total_attestations = total_attestations + 1, successful_attestations = successful_attestations + 1 WHERE id = $1',

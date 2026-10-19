@@ -114,7 +114,8 @@ export interface MarketplaceStats {
 export const VerifierRegistrationSchema = z.object({
   name: z.string().min(1).max(100),
   endpoint: z.string().url(),
-  publicKey: z.string().min(1),
+  // Optional: if omitted, the server generates an ed25519 keypair and returns the private key once.
+  publicKey: z.string().min(1).optional(),
   initialStake: z.number().min(1),
 });
 
@@ -126,6 +127,8 @@ export const AttestationSubmissionSchema = z.object({
   confidence: z.number().min(0).max(1),
   verifierId: z.string().min(1),
   price: z.number().min(0),
+  // Base64 ed25519 signature over the canonical attestation payload.
+  signature: z.string().min(1),
   royaltyPerAccess: z.number().min(0).default(0),
   expiresInSeconds: z.number().min(0).nullable().default(null),
   metadata: z.record(z.unknown()).default({}),

@@ -2,6 +2,7 @@ import { v4 as uuid } from 'uuid';
 import { getDatabase } from '../registry/database.js';
 import { submitAttestation } from '../registry/attestations.js';
 import { getVerifier } from '../registry/verifiers.js';
+import { canonicalAttestationPayload, verifyPayload } from '../trust/signing.js';
 import { getOrCreateWallet } from '../payments/wallets.js';
 import type { AttestationType } from '../types/index.js';
 
@@ -40,11 +41,18 @@ function rowToBounty(row: BountyRow): Bounty {
 export async function postBounty(params: {
   type: AttestationType; subject: string; subjectHash: string;
   reward: number; postedBy: string; expiresInSeconds?: number;
+  // When true, the reward was already collected out-of-band (x402 payment at
+  // the HTTP gate): skip the poster balance check/debit but still escrow the
+  // reward to the marketplace wallet so fulfill/cancel payouts work unchanged.
+  fundedExternally?: boolean;
 }): Promise<Bounty> {
   const db = getDatabase();
-  const wallet = await getOrCreateWallet(params.postedBy, 'buyer');
-  if (wallet.balance < params.reward) {
-    throw new Error(`Insufficient balance to fund bounty. Have ${wallet.balance}, need ${params.reward}.`);
+  const fundedExternally = params.fundedExternally === true;
+  if (!fundedExternally) {
+    const wallet = await getOrCreateWallet(params.postedBy, 'buyer');
+    if (wallet.balance < params.reward) {
+      throw new Error(`Insufficient balance to fund bounty. Have ${wallet.balance}, need ${params.reward}.`);
+    }
   }
 
   const id = uuid();
@@ -53,7 +61,9 @@ export async function postBounty(params: {
 
   await db.query('BEGIN');
   try {
-    await db.query('UPDATE payment_wallets SET balance = balance - $1 WHERE owner_id = $2', [params.reward, params.postedBy]);
+    if (!fundedExternally) {
+      await db.query('UPDATE payment_wallets SET balance = balance - $1 WHERE owner_id = $2', [params.reward, params.postedBy]);
+    }
     await db.query('UPDATE payment_wallets SET balance = balance + $1 WHERE owner_id = $2', [params.reward, 'marketplace']);
 
     await db.query(
@@ -111,7 +121,7 @@ export async function claimBounty(bountyId: string, verifierId: string): Promise
 }
 
 export async function fulfillBounty(
-  bountyId: string, result: string, resultSummary: string, confidence: number
+  bountyId: string, result: string, resultSummary: string, confidence: number, signature: string
 ): Promise<{ bounty: Bounty; attestation: Awaited<ReturnType<typeof submitAttestation>> }> {
   const db = getDatabase();
   const bounty = await getBounty(bountyId);
@@ -119,9 +129,21 @@ export async function fulfillBounty(
   if (bounty.status !== 'claimed') throw new Error(`Bounty must be claimed first: ${bountyId}`);
   if (!bounty.fulfilledBy) throw new Error(`Bounty has no assigned verifier`);
 
+  const verifier = await getVerifier(bounty.fulfilledBy);
+  if (!verifier) throw new Error(`Verifier not found: ${bounty.fulfilledBy}`);
+
+  const price = Math.round(bounty.reward * 0.1);
+  const payload = canonicalAttestationPayload({
+    type: bounty.type, subjectHash: bounty.subjectHash, result,
+    confidence, price, verifierId: bounty.fulfilledBy,
+  });
+  if (!verifyPayload(verifier.publicKey, payload, signature)) {
+    throw new Error('Invalid signature. Sign the canonical attestation payload with your verifier private key.');
+  }
+
   const attestation = await submitAttestation({
     type: bounty.type, subject: bounty.subject, result, resultSummary, confidence,
-    verifierId: bounty.fulfilledBy, price: Math.round(bounty.reward * 0.1),
+    verifierId: bounty.fulfilledBy, signature, price,
     royaltyPerAccess: Math.round(bounty.reward * 0.01), expiresInSeconds: null,
     metadata: { bountyId: bounty.id, source: 'bounty_fulfillment' },
   });

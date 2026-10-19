@@ -1,6 +1,7 @@
 import { getDatabase, initDatabase } from './registry/database.js';
 import { registerVerifier } from './registry/verifiers.js';
-import { submitAttestation } from './registry/attestations.js';
+import { submitAttestation, hashSubject } from './registry/attestations.js';
+import { canonicalAttestationPayload, signPayload } from './trust/signing.js';
 import { startAPI } from './api/rest.js';
 
 async function seedDatabase(): Promise<void> {
@@ -15,26 +16,31 @@ async function seedDatabase(): Promise<void> {
     return;
   }
 
+  // Server-assisted seed verifiers: keypairs are generated here and the private
+  // keys are used only to sign the initial seed attestations, then discarded.
   const v1 = await registerVerifier({
     name: 'Hive Moderation',
     endpoint: 'https://hivemoderation.com/api/verify',
-    publicKey: 'ed25519:hv_7a3b2c1d4e5f6a8b9c0d1e2f3a4b5c6',
     initialStake: 10000,
   });
 
   const v2 = await registerVerifier({
     name: 'Sensity AI',
     endpoint: 'https://sensity.ai/api/verify',
-    publicKey: 'ed25519:sn_2f3e4d5c6b7a8c9d0e1f2a3b4c5d6e7',
     initialStake: 25000,
   });
 
   const v3 = await registerVerifier({
     name: 'GPTZero',
     endpoint: 'https://gptzero.me/api/verify',
-    publicKey: 'ed25519:gz_9i8u7y6t5r4e3w2q1a0s9d8f7g6h5',
     initialStake: 50000,
   });
+
+  const privateKeys = new Map<string, string>([
+    [v1.id, v1.privateKeyPem!],
+    [v2.id, v2.privateKeyPem!],
+    [v3.id, v3.privateKeyPem!],
+  ]);
 
   const attestations = [
     { type: 'deepfake-detection' as const, subject: 'Viral political rally video — authenticity check', result: JSON.stringify({ isDeepfake: false, manipulationDetected: false, sourceVerified: true }), resultSummary: 'Authentic: No manipulation detected. Multi-frame analysis confirms natural motion.', confidence: 0.96, verifierId: v2.id, price: 50, royaltyPerAccess: 5 },
@@ -46,7 +52,12 @@ async function seedDatabase(): Promise<void> {
   ];
 
   for (const att of attestations) {
-    await submitAttestation({ ...att, expiresInSeconds: null, metadata: {}, resultSummary: att.resultSummary });
+    const payload = canonicalAttestationPayload({
+      type: att.type, subjectHash: hashSubject(att.subject), result: att.result,
+      confidence: att.confidence, price: att.price, verifierId: att.verifierId,
+    });
+    const signature = signPayload(privateKeys.get(att.verifierId)!, payload);
+    await submitAttestation({ ...att, signature, expiresInSeconds: null, metadata: {} });
   }
 
   console.log('Database seeded with 3 verifiers and 6 attestations');

@@ -1,8 +1,9 @@
 #!/usr/bin/env tsx
 import { Command } from 'commander';
-import { getDatabase, resetDatabase } from '../src/registry/database.js';
+import { getDatabase } from '../src/registry/database.js';
 import { registerVerifier, listVerifiers, getTopVerifiers } from '../src/registry/verifiers.js';
-import { submitAttestation, queryAttestations, getAttestation, purchaseAttestation } from '../src/registry/attestations.js';
+import { submitAttestation, queryAttestations, getAttestation, purchaseAttestation, hashSubject } from '../src/registry/attestations.js';
+import { generateVerifierKeypair, canonicalAttestationPayload, signPayload } from '../src/trust/signing.js';
 import { getMarketplaceStats } from '../src/marketplace/marketplace.js';
 import {
   getOrCreateWallet,
@@ -37,131 +38,148 @@ program
   .command('db-reset')
   .description('Reset the database (WARNING: deletes all data)')
   .action(() => {
-    resetDatabase();
-    console.log('Database reset complete');
+    console.log('db-reset is not supported against PostgreSQL. Drop and recreate the database, then run db-init.');
   });
 
 program
   .command('db-seed')
   .description('Seed the database with demo data')
-  .action(() => {
+  .action(async () => {
     getDatabase();
 
-    const v1 = registerVerifier({
+    // Demo keypairs are generated fresh each run; private keys are discarded after seeding.
+    const k1 = generateVerifierKeypair();
+    const k2 = generateVerifierKeypair();
+    const k3 = generateVerifierKeypair();
+
+    const v1 = await registerVerifier({
       name: 'DeepTrust Verify',
       endpoint: 'https://deeptrust.example/verify',
-      publicKey: 'ed25519:abc123def456',
+      publicKey: k1.publicKeyPem,
       initialStake: 10000,
     });
 
-    const v2 = registerVerifier({
+    const v2 = await registerVerifier({
       name: 'FactCheck AI',
       endpoint: 'https://factcheck.example/verify',
-      publicKey: 'ed25519:ghi789jkl012',
+      publicKey: k2.publicKeyPem,
       initialStake: 5000,
     });
 
-    const v3 = registerVerifier({
+    const v3 = await registerVerifier({
       name: 'IdentityGuard',
       endpoint: 'https://idguard.example/verify',
-      publicKey: 'ed25519:mno345pqr678',
+      publicKey: k3.publicKeyPem,
       initialStake: 25000,
     });
 
-    submitAttestation({
-      type: 'deepfake-detection',
-      subject: 'https://example.com/video/political-rally.mp4',
-      result: JSON.stringify({
-        isDeepfake: false,
-        manipulationDetected: false,
-        analysisMethod: 'ensemble-cnn-transformer',
-        frameAnalysis: 'all-frames',
-      }),
-      resultSummary: 'Video is authentic, no deepfake manipulation detected with 0.97 confidence',
-      confidence: 0.97,
-      verifierId: v1.id,
-      price: 0.50,
-      royaltyPerAccess: 0.05,
-      expiresInSeconds: 86400 * 30,
-      metadata: { fileSize: '250MB', duration: '3m42s', format: 'mp4' },
-    });
+    const privateKeys = new Map<string, string>([
+      [v1.id, k1.privateKeyPem],
+      [v2.id, k2.privateKeyPem],
+      [v3.id, k3.privateKeyPem],
+    ]);
 
-    submitAttestation({
-      type: 'deepfake-detection',
-      subject: 'https://example.com/video/celebrity-speech.mp4',
-      result: JSON.stringify({
-        isDeepfake: true,
-        manipulationDetected: true,
-        manipulationType: 'face-swap',
-        confidenceBreakdown: { faceSwap: 0.94, voiceSynthesis: 0.12 },
-      }),
-      resultSummary: 'Deepfake detected: face-swap manipulation with 0.94 confidence',
-      confidence: 0.94,
-      verifierId: v1.id,
-      price: 0.75,
-      royaltyPerAccess: 0.07,
-      expiresInSeconds: null,
-      metadata: { fileSize: '180MB', duration: '2m15s', format: 'mp4' },
-    });
+    const attestations = [
+      {
+        type: 'deepfake-detection' as const,
+        subject: 'https://example.com/video/political-rally.mp4',
+        result: JSON.stringify({
+          isDeepfake: false,
+          manipulationDetected: false,
+          analysisMethod: 'ensemble-cnn-transformer',
+          frameAnalysis: 'all-frames',
+        }),
+        resultSummary: 'Video is authentic, no deepfake manipulation detected with 0.97 confidence',
+        confidence: 0.97,
+        verifierId: v1.id,
+        price: 0.50,
+        royaltyPerAccess: 0.05,
+        expiresInSeconds: 86400 * 30,
+        metadata: { fileSize: '250MB', duration: '3m42s', format: 'mp4' },
+      },
+      {
+        type: 'deepfake-detection' as const,
+        subject: 'https://example.com/video/celebrity-speech.mp4',
+        result: JSON.stringify({
+          isDeepfake: true,
+          manipulationDetected: true,
+          manipulationType: 'face-swap',
+          confidenceBreakdown: { faceSwap: 0.94, voiceSynthesis: 0.12 },
+        }),
+        resultSummary: 'Deepfake detected: face-swap manipulation with 0.94 confidence',
+        confidence: 0.94,
+        verifierId: v1.id,
+        price: 0.75,
+        royaltyPerAccess: 0.07,
+        expiresInSeconds: null,
+        metadata: { fileSize: '180MB', duration: '2m15s', format: 'mp4' },
+      },
+      {
+        type: 'fact-check' as const,
+        subject: 'Statement: "Global temperatures have risen 2.5C since 1880"',
+        result: JSON.stringify({
+          claim: 'Global temperatures have risen 2.5C since 1880',
+          verdict: 'mostly-true',
+          actualRise: 'approximately 1.2C per NASA/NOAA data',
+          sources: ['NASA GISS', 'NOAA GlobalTemp', 'IPCC AR6'],
+          correction: 'The rise is approximately 1.2C, not 2.5C',
+        }),
+        resultSummary: 'Mostly true but overstated: actual rise is ~1.2C, not 2.5C',
+        confidence: 0.92,
+        verifierId: v2.id,
+        price: 0.10,
+        royaltyPerAccess: 0.01,
+        expiresInSeconds: 86400 * 90,
+        metadata: { topic: 'climate', sources: 3 },
+      },
+      {
+        type: 'identity-verification' as const,
+        subject: 'email:john.doe@example.com',
+        result: JSON.stringify({
+          verified: true,
+          domainValidated: true,
+          mailboxExists: true,
+          disposable: false,
+          riskScore: 0.02,
+        }),
+        resultSummary: 'Email identity verified: valid, non-disposable, low risk',
+        confidence: 0.99,
+        verifierId: v3.id,
+        price: 0.05,
+        royaltyPerAccess: 0.005,
+        expiresInSeconds: null,
+        metadata: { provider: 'gmail', verificationMethod: 'smtp-check' },
+      },
+      {
+        type: 'document-validation' as const,
+        subject: 'hash:sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        result: JSON.stringify({
+          valid: true,
+          documentType: 'legal-contract',
+          signatureValid: true,
+          notarized: true,
+          jurisdiction: 'US-GA',
+        }),
+        resultSummary: 'Legal document validated: signatures authentic, properly notarized in GA',
+        confidence: 0.95,
+        verifierId: v3.id,
+        price: 2.00,
+        royaltyPerAccess: 0.20,
+        expiresInSeconds: null,
+        metadata: { pages: 12, signatories: 3, date: '2025-03-15' },
+      },
+    ];
 
-    submitAttestation({
-      type: 'fact-check',
-      subject: 'Statement: "Global temperatures have risen 2.5C since 1880"',
-      result: JSON.stringify({
-        claim: 'Global temperatures have risen 2.5C since 1880',
-        verdict: 'mostly-true',
-        actualRise: 'approximately 1.2C per NASA/NOAA data',
-        sources: ['NASA GISS', 'NOAA GlobalTemp', 'IPCC AR6'],
-        correction: 'The rise is approximately 1.2C, not 2.5C',
-      }),
-      resultSummary: 'Mostly true but overstated: actual rise is ~1.2C, not 2.5C',
-      confidence: 0.92,
-      verifierId: v2.id,
-      price: 0.10,
-      royaltyPerAccess: 0.01,
-      expiresInSeconds: 86400 * 90,
-      metadata: { topic: 'climate', sources: 3 },
-    });
+    for (const att of attestations) {
+      const payload = canonicalAttestationPayload({
+        type: att.type, subjectHash: hashSubject(att.subject), result: att.result,
+        confidence: att.confidence, price: att.price, verifierId: att.verifierId,
+      });
+      const signature = signPayload(privateKeys.get(att.verifierId)!, payload);
+      await submitAttestation({ ...att, signature });
+    }
 
-    submitAttestation({
-      type: 'identity-verification',
-      subject: 'email:john.doe@example.com',
-      result: JSON.stringify({
-        verified: true,
-        domainValidated: true,
-        mailboxExists: true,
-        disposable: false,
-        riskScore: 0.02,
-      }),
-      resultSummary: 'Email identity verified: valid, non-disposable, low risk',
-      confidence: 0.99,
-      verifierId: v3.id,
-      price: 0.05,
-      royaltyPerAccess: 0.005,
-      expiresInSeconds: null,
-      metadata: { provider: 'gmail', verificationMethod: 'smtp-check' },
-    });
-
-    submitAttestation({
-      type: 'document-validation',
-      subject: 'hash:sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      result: JSON.stringify({
-        valid: true,
-        documentType: 'legal-contract',
-        signatureValid: true,
-        notarized: true,
-        jurisdiction: 'US-GA',
-      }),
-      resultSummary: 'Legal document validated: signatures authentic, properly notarized in GA',
-      confidence: 0.95,
-      verifierId: v3.id,
-      price: 2.00,
-      royaltyPerAccess: 0.20,
-      expiresInSeconds: null,
-      metadata: { pages: 12, signatories: 3, date: '2025-03-15' },
-    });
-
-    console.log('Seeded database with 3 verifiers and 5 attestations');
+    console.log('Seeded database with 3 verifiers and 5 attestations (all signed)');
     console.log(`  Verifiers: ${v1.name}, ${v2.name}, ${v3.name}`);
     console.log('  5 attestations across deepfake-detection, fact-check, identity-verification, document-validation');
   });

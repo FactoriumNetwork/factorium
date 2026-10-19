@@ -20,6 +20,8 @@ import {
   confirmDeposit, withdrawFunds,
 } from '../payments/wallets.js';
 import { isLightningConfigured } from '../payments/provider.js';
+import { paymentMiddleware } from '@x402/express';
+import { isX402Enabled, getX402ResourceServer, buildX402RouteConfig, getX402Info } from '../payments/x402.js';
 import { logApiRequest, logActivity, getUsageReport } from '../monitoring/usage.js';
 import { autoSeedDailyIfNeeded } from '../scheduler/auto-seed.js';
 import { onboardAgent } from '../onboarding/agent-onboard.js';
@@ -28,6 +30,7 @@ import {
   fulfillBounty, cancelBounty, getBountiesByPoster,
 } from '../bounties/bounty-market.js';
 import { generateApiKey, validateApiKeyAsync } from '../auth/keys.js';
+import { canonicalAttestationPayload, verifyPayload } from '../trust/signing.js';
 import { renderLanding, renderDashboard, renderLogin } from '../dashboard/html.js';
 import { getOrCreateMCPServer, createMCPHttpTransport, createAndConnectMCPTransport } from '../mcp/server.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -108,6 +111,13 @@ export function createAPI(): express.Express {
     next();
   });
 
+  // --- x402 payment gate (disabled unless X402_ENABLED=true) ---
+  // Mounted after express.json() and before any route handlers. Only the
+  // routes in buildX402RouteConfig() are gated; everything else passes through.
+  if (isX402Enabled()) {
+    app.use(paymentMiddleware(buildX402RouteConfig(), getX402ResourceServer()));
+  }
+
   // --- Public pages ---
 
   app.get('/', async (_req, res) => {
@@ -173,6 +183,9 @@ export function createAPI(): express.Express {
 
   app.get('/openapi.json', (_req, res) => { res.json(OPENAPI_SPEC); });
   app.get('/health', (_req, res) => { res.json({ status: 'ok', protocol: 'factorium', version: '1.0.7', mcp: '/mcp' }); });
+
+  // x402 payment configuration discovery (public; never includes secrets)
+  app.get('/x402/info', (_req, res) => { res.json(getX402Info()); });
 
   app.get('/robots.txt', (_req, res) => {
     res.type('text/plain');
@@ -240,7 +253,7 @@ export function createAPI(): express.Express {
     } catch (err) { res.status(400).json({ error: String(err) }); }
   });
 
-  app.get('/me', async (req, res) => {
+  app.get('/me', requireAuth, async (req, res) => {
     try {
       const agent = await resolveAuth(req);
       const wallet = await getWallet(agent.agentId);
@@ -249,7 +262,7 @@ export function createAPI(): express.Express {
       const verifier = await getVerifier(agent.agentId);
       res.json({ agent, wallet: wallet ? { balance: wallet.balance } : null, bountiesPosted: bounties.length, transactions: txns.length, isVerifier: !!verifier, verifier });
     } catch (err) { res.status(401).json({ error: String(err) }); }
-  }, requireAuth);
+  });
 
   app.get('/usage', async (_req, res) => {
     try { await autoSeedDailyIfNeeded(); res.json(await getUsageReport()); } catch (err) { res.status(500).json({ error: String(err) }); }
@@ -287,6 +300,30 @@ export function createAPI(): express.Express {
     res.json(a);
   });
 
+  app.get('/attestations/:id/verify', async (req, res) => {
+    try {
+      const a = await getAttestation(req.params.id as string);
+      if (!a) { res.status(404).json({ error: 'Not found' }); return; }
+      const verifier = await getVerifier(a.verifierId);
+
+      if (a.verifierSignature.startsWith('sig:')) {
+        res.json({ attestationId: a.id, verifierId: a.verifierId, signatureValid: false, verifierPublicKey: verifier?.publicKey ?? null, reason: 'legacy-unsigned' });
+        return;
+      }
+      if (!verifier) {
+        res.json({ attestationId: a.id, verifierId: a.verifierId, signatureValid: false, verifierPublicKey: null, reason: 'verifier-not-found' });
+        return;
+      }
+
+      const payload = canonicalAttestationPayload({
+        type: a.type, subjectHash: a.subjectHash, result: a.result,
+        confidence: a.confidence, price: a.price, verifierId: a.verifierId,
+      });
+      const valid = verifyPayload(verifier.publicKey, payload, a.verifierSignature);
+      res.json({ attestationId: a.id, verifierId: a.verifierId, signatureValid: valid, verifierPublicKey: verifier.publicKey, reason: valid ? 'ok' : 'signature-mismatch' });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
   app.post('/attestations', requireAuth, async (req, res) => {
     try {
       const agent = await resolveAuth(req);
@@ -299,14 +336,34 @@ export function createAPI(): express.Express {
         res.status(403).json({ error: `Insufficient stake. Need ${validated.price * 10}, have ${verifier.stakedAmount}.` });
         return;
       }
+      const payload = canonicalAttestationPayload({
+        type: validated.type, subjectHash: hashSubject(validated.subject), result: validated.result,
+        confidence: validated.confidence, price: validated.price, verifierId: agent.agentId,
+      });
+      if (!verifyPayload(verifier.publicKey, payload, validated.signature)) {
+        res.status(403).json({ error: 'Invalid signature. Sign the canonical attestation payload with your verifier private key.' });
+        return;
+      }
       const attestation = await submitAttestation({ ...validated, verifierId: agent.agentId });
       await logActivity('attestation_submitted', `${attestation.type}: ${attestation.resultSummary.slice(0, 80)}`, agent.agentId);
       res.status(201).json(attestation);
     } catch (err) { res.status(400).json({ error: String(err) }); }
   });
 
-  app.post('/attestations/:id/purchase', requireAuth, async (req, res) => {
+  // When x402 is enabled, the paymentMiddleware gate collects payment up front
+  // and the onAfterSettle hook records the ledger split — so this handler skips
+  // both auth (the payer's settled address is the buyer identity) and the
+  // internal purchaseAttestation() money movement. When disabled, the legacy
+  // internal-wallet path runs unchanged.
+  app.post('/attestations/:id/purchase', ...(isX402Enabled() ? [] : [requireAuth]), async (req, res) => {
     try {
+      if (isX402Enabled()) {
+        const attestation = await getAttestation(req.params.id as string);
+        if (!attestation) { res.status(404).json({ error: 'Not found' }); return; }
+        await logActivity('attestation_purchased_x402', `x402 purchase of attestation ${attestation.id} (${attestation.price} cents USD)`);
+        res.json({ attestation, payment: 'x402' });
+        return;
+      }
       const agent = await resolveAuth(req);
       const { buyerId } = req.body;
       if (!buyerId) { res.status(400).json({ error: 'buyerId required' }); return; }
@@ -340,7 +397,9 @@ export function createAPI(): express.Express {
       if (!type || !subject || !reward || !postedBy) { res.status(400).json({ error: 'type, subject, reward, postedBy required' }); return; }
       assertOwner(agent, postedBy, 'postedBy');
       await onboardAgent(agent.agentId);
-      const bounty = await postBounty({ type, subject, subjectHash: hashSubject(subject), reward, postedBy: agent.agentId, expiresInSeconds });
+      // When x402 is enabled the reward was charged at the payment gate, so
+      // postBounty skips the internal-wallet debit but still escrows the reward.
+      const bounty = await postBounty({ type, subject, subjectHash: hashSubject(subject), reward, postedBy: agent.agentId, expiresInSeconds, fundedExternally: isX402Enabled() });
       await logActivity('bounty_posted', `${type}: ${subject.slice(0, 60)} (${reward} sats)`, agent.agentId);
       res.status(201).json(bounty);
     } catch (err) { res.status(400).json({ error: String(err) }); }
@@ -367,9 +426,9 @@ export function createAPI(): express.Express {
   app.post('/bounties/:id/fulfill', requireAuth, async (req, res) => {
     try {
       await resolveAuth(req);
-      const { result, resultSummary, confidence } = req.body;
-      if (!result || !resultSummary || confidence === undefined) { res.status(400).json({ error: 'result, resultSummary, confidence required' }); return; }
-      const fulfilled = await fulfillBounty(req.params.id as string, result, resultSummary, confidence);
+      const { result, resultSummary, confidence, signature } = req.body;
+      if (!result || !resultSummary || confidence === undefined || !signature) { res.status(400).json({ error: 'result, resultSummary, confidence, signature required' }); return; }
+      const fulfilled = await fulfillBounty(req.params.id as string, result, resultSummary, confidence, signature);
       await logActivity('bounty_fulfilled', `Bounty fulfilled: ${resultSummary.slice(0, 60)}`);
       res.json(fulfilled);
     } catch (err) { res.status(400).json({ error: String(err) }); }
@@ -408,6 +467,10 @@ export function createAPI(): express.Express {
       await onboardAgent(agent.agentId);
       const verifier = await registerVerifier({ ...validated, id: agent.agentId });
       await logActivity('verifier_registered', `${validated.name} registered with ${validated.initialStake} stake`, agent.agentId);
+      if (verifier.privateKeyPem) {
+        res.status(201).json({ ...verifier, warning: 'Save this private key now. It will never be shown again.' });
+        return;
+      }
       res.status(201).json(verifier);
     } catch (err) { res.status(400).json({ error: String(err) }); }
   });

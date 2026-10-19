@@ -85,6 +85,8 @@ export async function initDatabase(): Promise<void> {
       marketplace_fee REAL NOT NULL,
       verifier_payout REAL NOT NULL,
       timestamp TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+      tx_hash TEXT,
+      payer_address TEXT,
       FOREIGN KEY (attestation_id) REFERENCES attestations(id),
       FOREIGN KEY (verifier_id) REFERENCES verifiers(id)
     );
@@ -153,6 +155,12 @@ export async function initDatabase(): Promise<void> {
       api_key_hash TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
     );
+  `);
+
+  // Migrate existing databases: x402 settlement metadata columns on transactions.
+  await db.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS tx_hash TEXT;
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payer_address TEXT;
   `);
 
   // Create indexes

@@ -1,5 +1,7 @@
 import { v4 as uuid } from 'uuid';
+import { createPublicKey } from 'crypto';
 import { getDatabase } from './database.js';
+import { generateVerifierKeypair } from '../trust/signing.js';
 import type { Verifier, StakingEvent } from '../types/index.js';
 
 interface VerifierRow {
@@ -35,22 +37,43 @@ function rowToVerifier(row: VerifierRow): Verifier {
 export async function registerVerifier(params: {
   name: string;
   endpoint: string;
-  publicKey: string;
+  publicKey?: string;
   initialStake: number;
   id?: string;
-}): Promise<Verifier> {
+}): Promise<Verifier & { privateKeyPem?: string }> {
   const db = getDatabase();
   const id = params.id || uuid();
   const now = new Date().toISOString();
 
+  let publicKey = params.publicKey;
+  let privateKeyPem: string | undefined;
+
+  if (publicKey) {
+    // External verifier managing its own keys: the PEM must parse and be ed25519.
+    try {
+      const key = createPublicKey(publicKey);
+      if (key.asymmetricKeyType !== 'ed25519') {
+        throw new Error('only ed25519 keys are supported');
+      }
+    } catch (err) {
+      throw new Error(`Invalid publicKey: must be a PEM-encoded ed25519 public key. ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else {
+    // Server-assisted verifier: generate a keypair and return the private key exactly once.
+    const keypair = generateVerifierKeypair();
+    publicKey = keypair.publicKeyPem;
+    privateKeyPem = keypair.privateKeyPem;
+  }
+
   await db.query(
     'INSERT INTO verifiers (id, name, endpoint, public_key, staked_amount, registered_at) VALUES ($1, $2, $3, $4, $5, $6)',
-    [id, params.name, params.endpoint, params.publicKey, params.initialStake, now]
+    [id, params.name, params.endpoint, publicKey, params.initialStake, now]
   );
 
   await logStakingEvent(id, params.initialStake, 'stake', 'Initial verifier stake');
 
-  return (await getVerifier(id))!;
+  const verifier = (await getVerifier(id))!;
+  return privateKeyPem ? { ...verifier, privateKeyPem } : verifier;
 }
 
 export async function getVerifier(id: string): Promise<Verifier | null> {

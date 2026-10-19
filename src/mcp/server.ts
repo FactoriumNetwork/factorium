@@ -24,6 +24,7 @@ import {
   getTopVerifiers,
 } from '../registry/verifiers.js';
 import { getMarketplaceStats } from '../marketplace/marketplace.js';
+import { canonicalAttestationPayload, verifyPayload } from '../trust/signing.js';
 import {
   AttestationSubmissionSchema,
   VerifierRegistrationSchema,
@@ -38,6 +39,8 @@ import {
   withdrawFunds,
 } from '../payments/wallets.js';
 import { isLightningConfigured } from '../payments/provider.js';
+import { isX402Enabled, getX402ResourceServer, getX402Network, getX402PayTo } from '../payments/x402.js';
+import { createPaymentWrapper, type MCPToolCallback } from '@x402/mcp';
 
 const TOOLS: Tool[] = [
   {
@@ -107,13 +110,17 @@ const TOOLS: Tool[] = [
           type: 'string',
           description: 'Verifier API endpoint for verification requests',
         },
-        publicKey: { type: 'string', description: 'Public key for signature verification' },
+        publicKey: {
+          type: 'string',
+          description:
+            'PEM-encoded ed25519 public key for signature verification. If omitted, the server generates a keypair and returns the private key exactly once.',
+        },
         initialStake: {
           type: 'number',
           description: 'Initial stake in sats for reputation collateral',
         },
       },
-      required: ['name', 'endpoint', 'publicKey', 'initialStake'],
+      required: ['name', 'endpoint', 'initialStake'],
     },
   },
   {
@@ -152,6 +159,11 @@ const TOOLS: Tool[] = [
           type: 'number',
           description: 'Price in sats per access',
         },
+        signature: {
+          type: 'string',
+          description:
+            'Base64 ed25519 signature over the canonical attestation payload (JSON with sorted keys: confidence, price, result, subjectHash, type, verifierId)',
+        },
         royaltyPerAccess: {
           type: 'number',
           description: 'Ongoing royalty per access (default 0, max 10% of price)',
@@ -165,7 +177,7 @@ const TOOLS: Tool[] = [
           description: 'Additional metadata about the attestation',
         },
       },
-      required: ['type', 'subject', 'result', 'resultSummary', 'confidence', 'verifierId', 'price'],
+      required: ['type', 'subject', 'result', 'resultSummary', 'confidence', 'verifierId', 'price', 'signature'],
     },
   },
   {
@@ -310,6 +322,41 @@ const TOOLS: Tool[] = [
   },
 ];
 
+// x402-gated variant of the query_attestation handler. Built lazily on first
+// use because building payment requirements needs the facilitator's supported
+// kinds (a network call via resourceServer.initialize()).
+let paidQueryHandlerPromise: Promise<MCPToolCallback> | null = null;
+
+function getPaidQueryAttestationHandler(): Promise<MCPToolCallback> {
+  if (!paidQueryHandlerPromise) {
+    paidQueryHandlerPromise = (async () => {
+      const server = getX402ResourceServer();
+      await server.initialize();
+      const accepts = await server.buildPaymentRequirements({
+        scheme: 'exact',
+        network: getX402Network(),
+        payTo: getX402PayTo(),
+        price: '$0.001',
+      });
+      const paid = createPaymentWrapper(server, {
+        accepts,
+        resource: {
+          description: 'Search the attestation marketplace for existing verifications',
+          mimeType: 'application/json',
+        },
+      });
+      return paid(async (args) => {
+        const validated = AttestationQuerySchema.parse(args ?? {});
+        const result = await queryAttestations(validated);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      });
+    })();
+    // If the facilitator is unreachable, don't cache the rejection — retry next call.
+    paidQueryHandlerPromise.catch(() => { paidQueryHandlerPromise = null; });
+  }
+  return paidQueryHandlerPromise;
+}
+
 function createServer(): Server {
   const server = new Server(
     { name: 'factorium-attestation-marketplace', version: '1.0.7' },
@@ -324,6 +371,13 @@ function createServer(): Server {
     try {
       switch (name) {
         case 'query_attestation': {
+          if (isX402Enabled()) {
+            // x402 gate: client must attach a payment payload in _meta['x402/payment'];
+            // the wrapper returns a 402-shaped result otherwise and settles after
+            // successful execution.
+            const wrapped = await getPaidQueryAttestationHandler();
+            return await wrapped((args ?? {}) as Record<string, unknown>, { _meta: request.params._meta });
+          }
           const validated = AttestationQuerySchema.parse(args ?? {});
           const result = queryAttestations(validated);
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -345,7 +399,10 @@ function createServer(): Server {
         case 'register_verifier': {
           const validated = VerifierRegistrationSchema.parse(args ?? {});
           const verifier = await registerVerifier(validated);
-          return { content: [{ type: 'text', text: JSON.stringify(verifier, null, 2) }] };
+          const response = verifier.privateKeyPem
+            ? { ...verifier, warning: 'Save this private key now. It will never be shown again.' }
+            : verifier;
+          return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }] };
         }
         case 'submit_attestation': {
           const validated = AttestationSubmissionSchema.parse(args ?? {});
@@ -355,6 +412,13 @@ function createServer(): Server {
           if (!verifier.active) throw new Error(`Verifier is inactive: ${verifierId}`);
           if (verifier.stakedAmount < validated.price * 10) {
             throw new Error(`Insufficient stake. Need ${validated.price * 10}, have ${verifier.stakedAmount}.`);
+          }
+          const payload = canonicalAttestationPayload({
+            type: validated.type, subjectHash: hashSubject(validated.subject), result: validated.result,
+            confidence: validated.confidence, price: validated.price, verifierId,
+          });
+          if (!verifyPayload(verifier.publicKey, payload, validated.signature)) {
+            throw new Error('Invalid signature. Sign the canonical attestation payload with your verifier private key.');
           }
           const attestation = await submitAttestation({ ...rest, verifierId });
           return { content: [{ type: 'text', text: JSON.stringify(attestation, null, 2) }] };
