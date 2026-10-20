@@ -263,8 +263,14 @@ async function attestOne(spec, creds) {
   }
   let resultSummary;
   if (vulnerable) {
-    const sev = advisories.map(x=>x.severity).filter(Boolean).join(",");
-    resultSummary = "Vulnerable to " + advisories.length + " advisory/advisories (" + (sev || "see details") + ") in npm registry data for " + pkg + "@" + version + ".";
+    const counts = {};
+    for (const a of advisories) {
+      const k = a.severity || "unknown";
+      counts[k] = (counts[k] || 0) + 1;
+    }
+    const parts = Object.entries(counts).map(([k, v]) => k + ": " + v).join(", ");
+    resultSummary = "Vulnerable to " + advisories.length + " advisory/advisories (" + parts + ") in npm registry data for " + pkg + "@" + version + ".";
+    if (resultSummary.length > 500) resultSummary = resultSummary.slice(0, 497) + "...";
   } else {
     resultSummary = "No known advisories found in npm registry security advisories for " + pkg + "@" + version + ".";
   }
