@@ -120,15 +120,38 @@ function generateEd25519Keypair() {
   };
 }
 
+async function credsAreValid(creds) {
+  try {
+    const me = await httpJson("GET", BASE_URL + "/me", undefined, {
+      "X-Agent-Id": creds.agentId,
+      "X-Api-Key": creds.apiKey,
+    });
+    return me.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function loadOrCreateCreds() {
   if (existsSync(credsPath)) {
+    let existing = null;
     try {
-      const creds = JSON.parse(readFileSync(credsPath, "utf8"));
-      if (creds.agentId && creds.apiKey && creds.verifierId && creds.privateKeyPem) {
-        console.log("[creds] Loaded from verifiers/.npm-audit/credentials.json");
-        return creds;
-      }
+      existing = JSON.parse(readFileSync(credsPath, "utf8"));
     } catch {}
+    if (existing) {
+      if (!(existing.agentId && existing.apiKey && existing.verifierId && existing.privateKeyPem)) {
+        throw new Error("verifiers/.npm-audit/credentials.json is missing required fields. Move it aside and re-run.");
+      }
+      console.log("[creds] Loaded from verifiers/.npm-audit/credentials.json");
+      if (!(await credsAreValid(existing))) {
+        throw new Error(
+          "Saved credentials are no longer valid on " + BASE_URL + " (GET /me rejected them). " +
+          "The agent or API key may have been removed server-side. " +
+          "Move verifiers/.npm-audit/credentials.json aside and re-run to register a new agent and verifier."
+        );
+      }
+      return existing;
+    }
   }
   mkdirSync(credsDir, { recursive: true });
   console.log("[creds] Creating new agent + verifier...");
@@ -169,6 +192,9 @@ async function loadOrCreateCreds() {
   }
 
   const creds = { agentId, apiKey, verifierId, privateKeyPem, baseUrl: BASE_URL, name: AGENT_NAME };
+  if (!(await credsAreValid(creds))) {
+    throw new Error("Freshly created credentials do not authenticate on " + BASE_URL + " (GET /me rejected them). Not saving; check the server's auth and database state.");
+  }
   writeFileSync(credsPath, JSON.stringify(creds, null, 2));
   console.log("[creds] Saved to verifiers/.npm-audit/credentials.json");
   return creds;
@@ -260,7 +286,8 @@ async function main() {
   if (!sub.ok) {
     console.error("[submit] FAILED: " + sub.status);
     console.error(JSON.stringify(sub.json));
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   const att = sub.json;
   console.log("[submit] created attestation id: " + att.id);
@@ -283,5 +310,5 @@ async function main() {
 
 main().catch(e => {
   console.error("ERROR:", e.message);
-  process.exit(1);
+  process.exitCode = 1;
 });
