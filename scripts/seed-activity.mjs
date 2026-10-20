@@ -1,4 +1,62 @@
-const BASE = 'https://factorium.network';
+import { readFileSync } from 'node:fs';
+import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
+
+let signing;
+try {
+  signing = await import('../dist/src/trust/signing.js');
+} catch {
+  console.error('Failed to load dist/src/trust/signing.js. Run `npm run build` first.');
+  process.exit(1);
+}
+const { canonicalAttestationPayload, signPayload } = signing;
+
+const BASE = process.env.SEED_BASE_URL || 'https://factorium.network';
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
+// Mirrors decodeEnvPem() in src/scheduler/auto-seed.ts: the env var may hold a
+// raw PEM or a base64-encoded PEM (for env-var safety).
+function decodeEnvPem(value) {
+  const trimmed = value.trim();
+  if (trimmed.includes('-----BEGIN')) return trimmed;
+  try {
+    const decoded = Buffer.from(trimmed, 'base64').toString('utf8');
+    if (decoded.includes('-----BEGIN')) return decoded;
+  } catch {}
+  return trimmed;
+}
+
+function loadVerifierPrivateKey() {
+  const inline = process.env.SEED_VERIFIER_PRIVATE_KEY;
+  const file = process.env.SEED_VERIFIER_KEY_FILE;
+  if (!inline && !file) {
+    fail(
+      'No verifier private key available. Set SEED_VERIFIER_PRIVATE_KEY (raw PEM or base64-encoded PEM) ' +
+      'or SEED_VERIFIER_KEY_FILE (path to a PEM file), then re-run. Refusing to seed unsigned attestations.'
+    );
+  }
+  if (inline) return decodeEnvPem(inline);
+  try {
+    return readFileSync(file, 'utf8');
+  } catch (err) {
+    fail(`Could not read SEED_VERIFIER_KEY_FILE (${file}): ${err.message}`);
+  }
+}
+
+const privateKeyPem = loadVerifierPrivateKey();
+let publicKeyPem;
+try {
+  publicKeyPem = createPublicKey(createPrivateKey(privateKeyPem)).export({ type: 'spki', format: 'pem' });
+} catch (err) {
+  fail(`The verifier private key is not a valid PKCS#8 PEM: ${err.message}`);
+}
+console.log(
+  'Verifier signing key loaded from',
+  process.env.SEED_VERIFIER_PRIVATE_KEY ? 'SEED_VERIFIER_PRIVATE_KEY' : `SEED_VERIFIER_KEY_FILE (${process.env.SEED_VERIFIER_KEY_FILE})`
+);
 
 async function post(path, body, agentId, apiKey) {
   const headers = agentId
@@ -8,20 +66,42 @@ async function post(path, body, agentId, apiKey) {
   return res.json();
 }
 
+// Same canonical payload + signature flow the dashboard and auto-seed use:
+// SHA-256 of the subject, sorted-key JSON over exactly the signed fields, then
+// ed25519 over that payload with the verifier's private key.
+function signAttestation(att, verifierId) {
+  const subjectHash = createHash('sha256').update(att.subject).digest('hex');
+  const payload = canonicalAttestationPayload({
+    type: att.type,
+    subjectHash,
+    result: att.result,
+    confidence: att.confidence,
+    price: att.price,
+    verifierId,
+  });
+  return signPayload(privateKeyPem, payload);
+}
+
 async function main() {
   // Create two agents
   const buyer = await post('/signup', { name: 'CryptoVerifierBot' });
   const seller = await post('/signup', { name: 'FactGuard AI' });
   console.log('Buyer:', buyer.agentId, '| Seller:', seller.agentId);
 
-  // Register seller as a verifier
-  await post('/verifiers', {
+  // Register seller as a verifier. The server validates publicKey as an ed25519
+  // PEM, so we hand it the public half of the key we sign with (omitting it would
+  // make the server generate a different keypair that cannot verify our signatures).
+  const registration = await post('/verifiers', {
     name: 'FactGuard AI',
     endpoint: 'https://factguard.ai/api/verify',
-    publicKey: 'ed25519:fg_' + Math.random().toString(36).slice(2,10),
+    publicKey: publicKeyPem,
     initialStake: 5000
   }, seller.agentId, seller.apiKey);
-  console.log('Verifier registered');
+  if (registration.error) {
+    console.log('Verifier registration failed (may already be registered):', registration.error);
+  } else {
+    console.log('Verifier registered');
+  }
 
   const attestations = [
     { type: 'fact-check', subject: 'Bitcoin block reward after 2024 halving', result: '{"verdict":"true","details":"3.125 BTC post April 2024 halving at block 840,000"}', resultSummary: 'True: Post-2024 halving, BTC block reward is exactly 3.125 BTC.', confidence: 0.99, price: 5, royaltyPerAccess: 1 },
@@ -32,11 +112,17 @@ async function main() {
   ];
 
   for (const att of attestations) {
-    await post('/attestations', {
+    const signature = signAttestation(att, seller.agentId);
+    const res = await post('/attestations', {
       ...att,
       verifierId: seller.agentId,
+      signature,
     }, seller.agentId, seller.apiKey);
-    console.log('Submitted:', att.type);
+    if (res.error) {
+      console.log('FAILED:', att.type, '-', res.error);
+    } else {
+      console.log('Submitted:', att.type);
+    }
   }
 
   // Buyer purchases all seller's attestations

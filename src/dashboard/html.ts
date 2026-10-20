@@ -444,9 +444,10 @@ nav{display:flex;gap:4px;margin:24px 0;border-bottom:1px solid #30363d;padding-b
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:16px}
 .card h3{color:#f0f6fc;font-size:16px;margin-bottom:12px}
 .form-row{display:flex;gap:12px;margin-bottom:12px}
-.form-row input,.form-row select{flex:1;padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:14px;font-family:inherit}
-.form-row input:focus,.form-row select:focus{outline:none;border-color:#58a6ff}
+.form-row input,.form-row select,.form-row textarea{flex:1;padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:14px;font-family:inherit}
+.form-row input:focus,.form-row select:focus,.form-row textarea:focus{outline:none;border-color:#58a6ff}
 .form-row select{background:#0d1117}
+.form-row textarea{resize:vertical;font-family:'SF Mono',monospace;font-size:13px}
 .btn-sm{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;border:none}
 .btn-primary{background:#238636;color:#fff}
 .btn-primary:hover{background:#2ea043}
@@ -454,6 +455,7 @@ nav{display:flex;gap:4px;margin:24px 0;border-bottom:1px solid #30363d;padding-b
 .btn-danger:hover{background:#da363333}
 .btn-secondary{background:#21262d;color:#c9d1d9;border:1px solid #30363d}
 .btn-secondary:hover{background:#30363d}
+.warning{background:#d2992211;border:1px solid #d29922;border-radius:6px;padding:12px;margin-top:12px;font-size:13px;color:#d29922}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;color:#8b949e;font-weight:500;padding:8px 12px;border-bottom:1px solid #30363d;font-size:12px;text-transform:uppercase;letter-spacing:0.5px}
 td{padding:10px 12px;border-bottom:1px solid #21262d;color:#c9d1d9}
@@ -567,6 +569,20 @@ tr:hover td{background:#1c2128}
       <div id="verifier-profile"></div>
     </div>
     <div class="card">
+      <h3>Verifier Signing Key</h3>
+      <p style="color:#8b949e;font-size:14px;margin-bottom:12px">Every attestation must be signed with this verifier's ed25519 private key. The server generates the keypair at registration and returns the private key exactly once; it is stored only in this browser.</p>
+      <p id="key-status" style="font-size:14px;margin-bottom:12px"></p>
+      <div class="form-row">
+        <textarea id="key-pem" rows="4" placeholder="Paste PEM private key (-----BEGIN PRIVATE KEY----- ...)"></textarea>
+      </div>
+      <div class="form-row">
+        <button class="btn-sm btn-primary" onclick="saveVerifierKey()">Save Key</button>
+        <button class="btn-sm btn-danger" onclick="removeVerifierKey()">Remove Stored Key</button>
+      </div>
+      <div id="key-msg"></div>
+      <div class="warning">Your private key is kept in this browser's localStorage and is used only by this page to sign attestation requests. Never share it, and never paste it on another site. Clearing site data for this dashboard removes it, so keep a backup when the server shows it to you.</div>
+    </div>
+    <div class="card">
       <h3>Submit Attestation</h3>
       <div class="form-row">
         <select id="submit-type">
@@ -600,13 +616,13 @@ tr:hover td{background:#1c2128}
     ` : `
     <div class="card">
       <h3>Register as a Verifier</h3>
-      <p style="color:#8b949e;font-size:14px;margin-bottom:16px">Verifiers earn bounties plus passive royalties on every attestation query. You need a name, an endpoint URL, and an initial stake amount.</p>
+      <p style="color:#8b949e;font-size:14px;margin-bottom:16px">Verifiers earn bounties plus passive royalties on every attestation query. You need a name, an endpoint URL, and an initial stake amount. Leave the public key blank and the server generates an ed25519 keypair for you, returning the private key once. This dashboard saves it to your browser automatically so you can sign attestations.</p>
       <div class="form-row">
         <input type="text" id="reg-name" placeholder="Verifier name...">
         <input type="text" id="reg-endpoint" placeholder="Endpoint URL (e.g. https://my-agent.example/verify)">
       </div>
       <div class="form-row">
-        <input type="text" id="reg-pubkey" placeholder="Public key (any string for now)">
+        <input type="text" id="reg-pubkey" placeholder="Public key PEM (optional, leave blank to generate a keypair)">
         <input type="number" id="reg-stake" placeholder="Initial stake (sats)" min="1" style="max-width:160px">
         <button class="btn-sm btn-primary" onclick="registerAsVerifier()">Register</button>
       </div>
@@ -685,7 +701,7 @@ function searchAttestations() {
           '<td>' + esc((a.resultSummary || '').slice(0, 80)) + '</td>' +
           '<td>' + (a.confidence * 100).toFixed(0) + '%</td>' +
           '<td>' + a.price + ' sats</td>' +
-          '<td><button class="btn-sm btn-primary" onclick="buyAttestation(\'' + a.id + '\')">Buy</button></td>' +
+          '<td><button class="btn-sm btn-primary" onclick="buyAttestation(\\'' + a.id + '\\')">Buy</button></td>' +
           '</tr>';
       });
       html += '</table>';
@@ -763,9 +779,9 @@ function loadBounties() {
           '<td class="mono">' + esc(b.expiresAt ? b.expiresAt.slice(0, 10) : '') + '</td>' +
           '<td>';
         if (isMine) {
-          html += '<button class="btn-sm btn-danger" onclick="cancelBounty(\'' + b.id + '\')">Cancel</button>';
+          html += '<button class="btn-sm btn-danger" onclick="cancelBounty(\\'' + b.id + '\\')">Cancel</button>';
         } else {
-          html += '<button class="btn-sm btn-primary" onclick="claimBounty(\'' + b.id + '\')">Claim</button>';
+          html += '<button class="btn-sm btn-primary" onclick="claimBounty(\\'' + b.id + '\\')">Claim</button>';
         }
         html += '</td></tr>';
       });
@@ -854,6 +870,130 @@ function loadMyTxns() {
     });
 }
 
+// --- Verifier signing key management ---
+// NOTE: scripts/check-dashboard-signing.mjs renders this dashboard in Node,
+// extracts the inline script, and executes canonicalAttestationPayload() and
+// sha256Hex() from it against the server implementation
+// (src/trust/signing.ts). Keep both functions free of backslashes, backticks
+// and template-literal placeholders so their logic never depends on how this
+// template literal is escaped.
+
+function canonicalAttestationPayload(fields) {
+  return JSON.stringify({
+    confidence: fields.confidence,
+    price: fields.price,
+    result: fields.result,
+    subjectHash: fields.subjectHash,
+    type: fields.type,
+    verifierId: fields.verifierId
+  });
+}
+
+async function sha256Hex(text) {
+  var bytes = new TextEncoder().encode(text);
+  var digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  var hex = '';
+  for (var i = 0; i < digest.length; i++) hex += digest[i].toString(16).padStart(2, '0');
+  return hex;
+}
+
+function verifierKeyStorageKey(verifierId) {
+  return 'factorium:verifier-key:' + verifierId;
+}
+
+function getStoredVerifierKey(verifierId) {
+  try { return window.localStorage.getItem(verifierKeyStorageKey(verifierId)); } catch (e) { return null; }
+}
+
+function storeVerifierKey(verifierId, pem) {
+  window.localStorage.setItem(verifierKeyStorageKey(verifierId), pem);
+}
+
+function normalizePem(pem) {
+  var m = String(pem || '').trim().match(/-----BEGIN ([A-Z0-9 ]+)-----([\\s\\S]*?)-----END \\1-----/);
+  if (!m) return null;
+  var body = m[2].replace(/\\s+/g, '');
+  if (!body) return null;
+  var lines = body.match(/.{1,64}/g) || [];
+  return '-----BEGIN ' + m[1] + '-----\\n' + lines.join('\\n') + '\\n-----END ' + m[1] + '-----\\n';
+}
+
+// Structurally valid PKCS#8 ed25519 key with a zeroed seed. Used only to detect
+// whether WebCrypto knows the Ed25519 algorithm; it is never a usable key.
+var ED25519_PROBE_PKCS8_B64 = 'MC4CAQAwBQYDK2VwBCIEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+function supportsEd25519() {
+  if (!window.crypto || !window.crypto.subtle) return Promise.resolve(false);
+  var raw = atob(ED25519_PROBE_PKCS8_B64);
+  var bytes = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return crypto.subtle.importKey('pkcs8', bytes.buffer, { name: 'Ed25519' }, false, ['sign'])
+    .then(function() { return true; })
+    .catch(function(err) {
+      // An unknown algorithm surfaces as NotSupportedError (or SyntaxError on
+      // older engines). Any other rejection means the algorithm exists.
+      return !(err && (err.name === 'NotSupportedError' || err.name === 'SyntaxError'));
+    });
+}
+
+function pemToArrayBuffer(pem) {
+  var b64 = pem.replace(/-----[^-]+-----/g, '').replace(/\\s+/g, '');
+  var raw = atob(b64);
+  var bytes = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function importVerifierSigningKey(pem) {
+  var der = pemToArrayBuffer(pem);
+  try {
+    return await crypto.subtle.importKey('pkcs8', der, { name: 'Ed25519' }, false, ['sign']);
+  } catch (err) {
+    throw new Error('Could not import the PEM private key. It must be a PKCS#8 ed25519 key (-----BEGIN PRIVATE KEY-----).');
+  }
+}
+
+async function signAttestationPayload(privateKeyPem, payload) {
+  var key = await importVerifierSigningKey(privateKeyPem);
+  var signature = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, key, new TextEncoder().encode(payload)));
+  var binary = '';
+  for (var i = 0; i < signature.length; i++) binary += String.fromCharCode(signature[i]);
+  return btoa(binary);
+}
+
+function keyMsg(html) {
+  var el = document.getElementById('key-msg');
+  if (el) el.innerHTML = html;
+}
+
+function saveVerifierKey() {
+  var pem = normalizePem(document.getElementById('key-pem').value);
+  if (!pem) {
+    keyMsg('<p style="color:#f85149">That does not look like a PEM private key. Paste the full block including the -----BEGIN PRIVATE KEY----- and -----END PRIVATE KEY----- lines.</p>');
+    return;
+  }
+  storeVerifierKey(FACTORIUM_AGENT_ID, pem);
+  document.getElementById('key-pem').value = '';
+  updateKeyStatus();
+  keyMsg('<p style="color:#3fb950">Signing key saved in this browser for ' + esc(FACTORIUM_AGENT_ID) + '. It will be used to sign your attestations.</p>');
+}
+
+function removeVerifierKey() {
+  try { window.localStorage.removeItem(verifierKeyStorageKey(FACTORIUM_AGENT_ID)); } catch (e) {}
+  updateKeyStatus();
+  keyMsg('<p style="color:#d29922">Stored signing key removed. Attestation submissions will fail until a key is saved again.</p>');
+}
+
+function updateKeyStatus() {
+  var el = document.getElementById('key-status');
+  if (!el) return;
+  if (getStoredVerifierKey(FACTORIUM_AGENT_ID)) {
+    el.innerHTML = '<span style="color:#3fb950">Signing key stored in this browser.</span> Attestations you submit are signed automatically.';
+  } else {
+    el.innerHTML = '<span style="color:#d29922">No signing key stored.</span> Paste your PEM private key above to enable attestation signing.';
+  }
+}
+
 // --- Verifier ---
 
 function loadVerifierTab() {
@@ -870,6 +1010,7 @@ function loadVerifierTab() {
         '<tr><td style="color:#8b949e">Active</td><td>' + (v.active ? '<span style="color:#3fb950">Yes</span>' : '<span style="color:#f85149">No</span>') + '</td></tr>' +
         '</table>';
     }
+    updateKeyStatus();
     loadMyAttestations();
   }
 }
@@ -905,15 +1046,18 @@ function registerAsVerifier() {
   var pubkey = document.getElementById('reg-pubkey').value.trim();
   var stake = parseInt(document.getElementById('reg-stake').value);
 
-  if (!name || !endpoint || !pubkey || !stake) {
-    document.getElementById('reg-result').innerHTML = '<p style="color:#f85149">All fields are required.</p>';
+  if (!name || !endpoint || !stake) {
+    document.getElementById('reg-result').innerHTML = '<p style="color:#f85149">Name, endpoint, and stake are required. Leave the public key blank to have the server generate a keypair.</p>';
     return;
   }
+
+  var body = { name: name, endpoint: endpoint, initialStake: stake };
+  if (pubkey) body.publicKey = pubkey;
 
   fetch('/verifiers', {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ name: name, endpoint: endpoint, publicKey: pubkey, initialStake: stake })
+    body: JSON.stringify(body)
   })
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -921,12 +1065,25 @@ function registerAsVerifier() {
         document.getElementById('reg-result').innerHTML = '<p style="color:#f85149">' + esc(data.error) + '</p>';
         return;
       }
+      if (data.privateKeyPem) {
+        // One-time registration response: capture the private key in localStorage
+        // keyed by verifier id so submitAttestation() can sign without prompting.
+        try {
+          storeVerifierKey(data.id || FACTORIUM_AGENT_ID, normalizePem(data.privateKeyPem) || data.privateKeyPem);
+        } catch (e) {}
+        document.getElementById('reg-result').innerHTML =
+          '<p style="color:#3fb950">Verifier registered! Private key saved to this browser for this verifier.</p>' +
+          '<div class="warning">This private key is shown once by the API. It is stored in this browser now, but copy it here if you want a separate backup. Never share it.</div>' +
+          '<pre style="margin-top:8px;white-space:pre-wrap;word-break:break-all">' + esc(data.privateKeyPem) + '</pre>' +
+          '<button class="btn-sm btn-primary" style="margin-top:8px" onclick="window.location.reload()">Reload Dashboard</button>';
+        return;
+      }
       document.getElementById('reg-result').innerHTML = '<p style="color:#3fb950">Verifier registered! Reloading...</p>';
       setTimeout(function() { window.location.reload(); }, 1500);
     });
 }
 
-function submitAttestation() {
+async function submitAttestation() {
   var type = document.getElementById('submit-type').value;
   var subject = document.getElementById('submit-subject').value.trim();
   var summary = document.getElementById('submit-summary').value.trim();
@@ -934,36 +1091,69 @@ function submitAttestation() {
   var confidence = parseFloat(document.getElementById('submit-confidence').value);
   var price = parseInt(document.getElementById('submit-price').value);
   var royalty = parseInt(document.getElementById('submit-royalty').value) || 0;
+  var msgEl = document.getElementById('submit-result-msg');
 
   if (!subject || !summary || !result || isNaN(confidence) || isNaN(price)) {
-    document.getElementById('submit-result-msg').innerHTML = '<p style="color:#f85149">Subject, summary, result, confidence, and price are required.</p>';
+    msgEl.innerHTML = '<p style="color:#f85149">Subject, summary, result, confidence, and price are required.</p>';
     return;
   }
 
-  fetch('/attestations', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({
-      type: type,
-      subject: subject,
-      result: result,
-      resultSummary: summary,
+  if (!window.crypto || !window.crypto.subtle) {
+    msgEl.innerHTML = '<p style="color:#f85149">WebCrypto is unavailable. Open this dashboard over HTTPS (or localhost) in a recent Chrome or Edge browser to sign attestations.</p>';
+    return;
+  }
+  if (!(await supportsEd25519())) {
+    msgEl.innerHTML = '<p style="color:#f85149">This browser does not support Ed25519 signing in WebCrypto, so attestations cannot be signed here. Use a recent Chrome or Edge browser.</p>';
+    return;
+  }
+
+  var privateKeyPem = getStoredVerifierKey(FACTORIUM_AGENT_ID);
+  if (!privateKeyPem) {
+    msgEl.innerHTML = '<p style="color:#f85149">No signing key is stored for this verifier. Save your PEM private key in the Verifier Signing Key panel above, then submit again.</p>';
+    return;
+  }
+
+  msgEl.innerHTML = '<p style="color:#8b949e">Signing attestation...</p>';
+
+  try {
+    var subjectHash = await sha256Hex(subject);
+    // confidence and price are parsed once and reused verbatim in both the signed
+    // payload and the request body, so their JSON serialization is byte-identical.
+    var payload = canonicalAttestationPayload({
       confidence: confidence,
-      verifierId: FACTORIUM_AGENT_ID,
       price: price,
-      royaltyPerAccess: royalty
-    })
-  })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.error) {
-        document.getElementById('submit-result-msg').innerHTML = '<p style="color:#f85149">' + esc(data.error) + '</p>';
-        return;
-      }
-      document.getElementById('submit-result-msg').innerHTML = '<p style="color:#3fb950">Attestation submitted! ID: <span class="mono">' + data.id.slice(0, 8) + '</span></p>';
-      loadMyAttestations();
-      refreshWallet();
+      result: result,
+      subjectHash: subjectHash,
+      type: type,
+      verifierId: FACTORIUM_AGENT_ID
     });
+    var signature = await signAttestationPayload(privateKeyPem, payload);
+    var res = await fetch('/attestations', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        type: type,
+        subject: subject,
+        result: result,
+        resultSummary: summary,
+        confidence: confidence,
+        verifierId: FACTORIUM_AGENT_ID,
+        price: price,
+        royaltyPerAccess: royalty,
+        signature: signature
+      })
+    });
+    var data = await res.json();
+    if (data.error) {
+      msgEl.innerHTML = '<p style="color:#f85149">' + esc(data.error) + '</p>';
+      return;
+    }
+    msgEl.innerHTML = '<p style="color:#3fb950">Attestation submitted! ID: <span class="mono">' + data.id.slice(0, 8) + '</span></p>';
+    loadMyAttestations();
+    refreshWallet();
+  } catch (err) {
+    msgEl.innerHTML = '<p style="color:#f85149">' + esc(err && err.message ? err.message : String(err)) + '</p>';
+  }
 }
 
 function esc(s) {
