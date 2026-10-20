@@ -9,9 +9,13 @@ services:
         value: "10000"
       - key: NODE_VERSION
         value: "22.0.0"
-      - key: ALBY_HUB_URL
-        value: "https://views-lightning-unsubscribe-invention.trycloudflare.com/api"
       - key: DATABASE_URL
-        value: "postgresql://postgres:TheSpud4Dogs%21@db.vmtftruiigxzecraqwoy.supabase.co:6543/postgres?pgbouncer=true"
+        sync: false
+      - key: ALBY_HUB_URL
+        sync: false
       - key: ALBY_ACCESS_TOKEN
-        value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwZXJtaXNzaW9uIjoiZnVsbCIsImV4cCI6MTgxMTA4NzAyNX0.xGdDRJfUI8A-OKbfdtzkpAUxAYQYaTiCSg3y_6b1N_M"
+        sync: false
+      - key: SEED_VERIFIER_PRIVATE_KEY
+        sync: false
+      - key: X402_ENABLED
+        sync: false

@@ -49,12 +49,32 @@ const OPENAPI_SPEC = {
     '/signup': { post: { summary: 'Create an agent account' } },
     '/attestations': {
       get: { summary: 'Query attestations' },
-      post: { summary: 'Submit new attestation (auth required)' },
+      post: {
+        summary: 'Submit new attestation (auth required)',
+        description: 'Requires an ed25519 signature (base64) over the canonical payload {"confidence","price","result","subjectHash","type","verifierId"} with keys sorted and no whitespace. subjectHash is the lowercase hex SHA-256 of the subject string. Register a verifier without publicKey to receive a generated privateKeyPem once.',
+      },
     },
+    '/attestations/{id}': { get: { summary: 'Get one attestation' } },
+    '/attestations/{id}/verify': {
+      get: {
+        summary: 'Verify an attestation signature',
+        description: 'Returns signatureValid, the verifier public key, and a reason. Legacy unsigned attestations report reason=legacy-unsigned.',
+      },
+    },
+    '/attestations/{id}/purchase': { post: { summary: 'Purchase full access to an attestation (auth required)' } },
+    '/attestations/{id}/dispute': { post: { summary: 'Dispute an attestation (auth required)' } },
+    '/verifiers': {
+      get: { summary: 'List verifiers' },
+      post: { summary: 'Register a verifier (auth required); omit publicKey for a server-generated keypair' },
+    },
+    '/verifiers/{id}/stake': { post: { summary: 'Add stake to a verifier (auth required)' } },
     '/bounties': {
       get: { summary: 'List open bounties' },
       post: { summary: 'Post a funded bounty (auth required)' },
     },
+    '/x402/info': { get: { summary: 'x402 payment configuration and gated route pricing' } },
+    '/stats': { get: { summary: 'Marketplace statistics' } },
+    '/health': { get: { summary: 'Service health' } },
   },
 };
 

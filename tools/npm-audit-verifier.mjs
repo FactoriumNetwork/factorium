@@ -19,10 +19,11 @@ function printHelp() {
   console.log(`NPM Audit Verifier for Factorium
 
 Usage:
-  node tools/npm-audit-verifier.mjs <npm-spec> [--base-url <url>] [--agent-name <name>]
+  node tools/npm-audit-verifier.mjs <npm-spec> [<npm-spec> ...] [--base-url <url>] [--agent-name <name>]
 
 Arguments:
-  <npm-spec>    npm package spec like npm:lodash@4.17.15 or lodash@4.17.15
+  <npm-spec>    One or more npm package specs like npm:lodash@4.17.15 or lodash@4.17.15
+                Duplicates are ignored; per-package failures do not stop the batch.
 
 Environment:
   BASE_URL      Factorium API base URL (default: https://factorium.network)
@@ -74,15 +75,15 @@ async function reportPostgres() {
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  let spec = null;
+  const specs = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--help" || a === "-h") { printHelp(); process.exit(0); }
     if (a === "--base-url" && args[i+1]) { process.env.BASE_URL = args[++i]; continue; }
     if (a === "--agent-name" && args[i+1]) { process.env.AGENT_NAME = args[++i]; continue; }
-    if (!a.startsWith("-")) { spec = a; continue; }
+    if (!a.startsWith("-")) { specs.push(a); continue; }
   }
-  return spec;
+  return [...new Set(specs)];
 }
 
 function parseSpec(spec) {
@@ -201,12 +202,17 @@ async function loadOrCreateCreds() {
 }
 
 async function queryAdvisories(pkg, version) {
+  const meta = await fetch("https://registry.npmjs.org/" + pkg.replace("/", "%2f") + "/" + version);
+  if (meta.status === 404) throw new Error("Package version not found on npm: " + pkg + "@" + version);
   const res = await fetch("https://registry.npmjs.org/-/npm/v1/security/advisories/bulk", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ [pkg]: [version === "latest" ? "*" : version] }),
   });
-  return await res.json();
+  if (!res.ok) throw new Error("Advisory API returned " + res.status);
+  const body = await res.json();
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Unexpected advisory API response");
+  return body;
 }
 
 async function main() {
@@ -214,12 +220,33 @@ async function main() {
   ensureGitignore();
   console.log("[config] BASE_URL: " + BASE_URL);
   await reportPostgres();
-  const spec = parseArgs(process.argv);
-  const { pkg, version } = parseSpec(spec);
-  console.log("[target] npm:" + pkg + "@" + version);
+  const specs = parseArgs(process.argv);
+  if (specs.length === 0) throw new Error("Missing npm package spec (try --help)");
 
   const creds = await loadOrCreateCreds();
   console.log("[creds] Using verifierId: " + creds.verifierId);
+
+  const results = [];
+  for (const spec of specs) {
+    try {
+      results.push(await attestOne(spec, creds));
+    } catch (e) {
+      results.push({ ok: false, subject: spec, error: e.message });
+    }
+  }
+
+  console.log("\n=== SUMMARY ===");
+  for (const r of results) {
+    console.log((r.ok ? "ok    " : "FAIL  ") + r.subject + " -> " + (r.ok ? r.id : r.error));
+  }
+  const created = results.filter(r => r.ok).length;
+  console.log(created + "/" + results.length + " attestations created");
+  if (created === 0) process.exitCode = 1;
+}
+
+async function attestOne(spec, creds) {
+  const { pkg, version } = parseSpec(spec);
+  console.log("\n[target] npm:" + pkg + "@" + version);
 
   console.log("[advisory] Querying npm registry security advisories...");
   const adv = await queryAdvisories(pkg, version);
@@ -286,8 +313,7 @@ async function main() {
   if (!sub.ok) {
     console.error("[submit] FAILED: " + sub.status);
     console.error(JSON.stringify(sub.json));
-    process.exitCode = 1;
-    return;
+    return { ok: false, subject, error: sub.status + " " + JSON.stringify(sub.json) };
   }
   const att = sub.json;
   console.log("[submit] created attestation id: " + att.id);
@@ -304,8 +330,7 @@ async function main() {
   } catch (e) {
     console.log("[get] GET /attestations/:id: error " + e.message);
   }
-  console.log("\n=== DONE ===");
-  console.log("attestationId:", att.id);
+  return { ok: true, subject, id: att.id };
 }
 
 main().catch(e => {
