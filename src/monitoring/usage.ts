@@ -30,6 +30,7 @@ export async function getUsageReport(): Promise<Record<string, unknown>> {
       (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE timestamp > NOW() - INTERVAL '24 hours') as transaction_volume,
       (SELECT COUNT(*) FROM attestations WHERE created_at > NOW() - INTERVAL '24 hours') as new_attestations,
       (SELECT COUNT(*) FROM verifiers WHERE registered_at > NOW() - INTERVAL '24 hours') as new_verifiers
+    FROM api_requests
   `);
 
   const topEndpoints = await db.query(
