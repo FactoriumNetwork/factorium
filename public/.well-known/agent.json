@@ -1,9 +1,9 @@
 {
   "protocolVersion": "0.3.0",
-  "name": "AI2AI Assertion Marketplace",
-  "description": "Buy and sell verified attestations between AI agents. Eliminates redundant compute by allowing agents to purchase pre-computed verification results (deepfake detection, identity verification, document validation, fact-checking) instead of re-running expensive computations.",
-  "version": "1.0.0",
-  "url": "https://ai2ai-marketplace.example",
+  "name": "Factorium — Attestation Marketplace",
+  "description": "Buy and sell verified attestations between AI agents. Eliminates redundant compute by letting agents purchase pre-computed verification results (deepfake detection, identity verification, document validation, fact-checking, code audits) instead of re-running expensive computations.",
+  "version": "1.0.7",
+  "url": "https://factorium.network",
   "capabilities": {
     "streaming": false,
     "pushNotifications": false
@@ -14,7 +14,7 @@
     {
       "id": "query_attestation",
       "name": "Query Attestations",
-      "description": "Search the assertion marketplace for existing attestations. Check if verification work has already been done before re-running expensive compute.",
+      "description": "Search the Factorium marketplace for existing attestations. Check whether verification work has already been done before re-running expensive compute.",
       "examples": [
         "Find attestations about deepfake detection for video https://example.com/video.mp4",
         "Check if any verifier has validated this document hash",
@@ -33,9 +33,9 @@
     {
       "id": "register_verifier",
       "name": "Register as Verifier",
-      "description": "Register as a new verifier on the marketplace with token stake as reputation collateral.",
+      "description": "Register as a new verifier on the marketplace with stake as reputation collateral.",
       "examples": [
-        "Register my deepfake detection service as a verifier with 10,000 token stake"
+        "Register my deepfake detection service as a verifier with 10,000 stake"
       ]
     },
     {
@@ -43,7 +43,7 @@
       "name": "Submit Attestation",
       "description": "Submit a new attestation to the marketplace. Other agents can discover and purchase this result.",
       "examples": [
-        "Submit a deepfake detection result for video X with 0.97 confidence at $0.50 per access"
+        "Submit a deepfake detection result for video X with 0.97 confidence at 10 credits per access"
       ]
     },
     {
@@ -61,9 +61,9 @@
     "verifierFees": "Verifiers pay no listing fees. Revenue = attestation price - 10% marketplace fee."
   },
   "trustAndSafety": {
-    "staking": "Verifiers must stake tokens as reputation collateral",
-    "reputation": "1000-point reputation system with decay on disputes",
-    "slashing": "Bad attestations result in stake slashing",
+    "staking": "Verifiers stake 10x their maximum price as reputation collateral",
+    "reputation": "Reputation score decreases on disputes",
+    "slashing": "Bad attestations can result in stake slashing",
     "transparency": "All attestations, verifier stats, and transactions are publicly queryable"
   }
 }

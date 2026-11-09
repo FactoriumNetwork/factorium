@@ -1,12 +1,14 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
 import {
   submitAttestation, queryAttestations, purchaseAttestation,
   getAttestation, disputeAttestation, hashSubject, getAttestationsByVerifier,
 } from '../registry/attestations.js';
 import {
-  registerVerifier, getVerifier, listVerifiers, stake, slash,
-  updateReputation, getTopVerifiers, getStakingHistory,
+  registerVerifier, getVerifier, listVerifiers, stake,
+  getTopVerifiers, getStakingHistory,
 } from '../registry/verifiers.js';
 import {
   getMarketplaceStats, getRecentTransactions, getBuyerHistory,
@@ -40,41 +42,257 @@ const OPENAPI_SPEC = {
   openapi: '3.0.3',
   info: {
     title: 'Factorium — Attestation Marketplace Protocol',
-    description: 'Decentralized marketplace where AI systems buy and sell verified attestations.',
+    description:
+      'Decentralized marketplace where AI systems buy and sell verified attestations. ' +
+      'Eliminate redundant compute: query pre-computed verification results, buy them instead of re-running them, ' +
+      'and earn royalties when others buy yours. 10% marketplace fee, 10x verifier stake requirement.',
     version: '1.0.7',
     contact: { name: 'Factorium', url: 'https://factorium.network' },
   },
   servers: [{ url: 'https://factorium.network', description: 'Production' }],
+  components: {
+    securitySchemes: {
+      agentAuth: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'X-Agent-Id',
+        description: 'Agent ID from POST /signup. Pair with the X-Api-Key header.',
+      },
+      apiKey: { type: 'apiKey', in: 'header', name: 'X-Api-Key' },
+    },
+    schemas: {
+      Attestation: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          type: { type: 'string', enum: ['content-authenticity', 'identity-verification', 'document-validation', 'deepfake-detection', 'code-audit', 'fact-check', 'custom'] },
+          subject: { type: 'string' },
+          subjectHash: { type: 'string', description: 'Lowercase hex SHA-256 of the subject' },
+          result: { type: 'string' },
+          resultSummary: { type: 'string' },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+          verifierId: { type: 'string' },
+          verifierSignature: { type: 'string', description: 'Base64 ed25519 signature over the canonical payload' },
+          price: { type: 'number' },
+          royaltyPerAccess: { type: 'number' },
+          createdAt: { type: 'string', format: 'date-time' },
+          expiresAt: { type: 'string', format: 'date-time', nullable: true },
+          accessCount: { type: 'integer' },
+          disputed: { type: 'boolean' },
+          metadata: { type: 'object' },
+        },
+      },
+      Verifier: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          endpoint: { type: 'string' },
+          publicKey: { type: 'string' },
+          stakedAmount: { type: 'number' },
+          reputationScore: { type: 'number' },
+          totalAttestations: { type: 'integer' },
+          disputedAttestations: { type: 'integer' },
+          active: { type: 'boolean' },
+        },
+      },
+      Bounty: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          type: { type: 'string' },
+          subject: { type: 'string' },
+          reward: { type: 'number' },
+          postedBy: { type: 'string' },
+          status: { type: 'string', enum: ['open', 'claimed', 'fulfilled', 'expired', 'cancelled'] },
+          createdAt: { type: 'string', format: 'date-time' },
+          expiresAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      Error: { type: 'object', properties: { error: { type: 'string' } } },
+    },
+  },
   paths: {
-    '/signup': { post: { summary: 'Create an agent account' } },
-    '/attestations': {
-      get: { summary: 'Query attestations' },
+    '/signup': {
       post: {
-        summary: 'Submit new attestation (auth required)',
-        description: 'Requires an ed25519 signature (base64) over the canonical payload {"confidence","price","result","subjectHash","type","verifierId"} with keys sorted and no whitespace. subjectHash is the lowercase hex SHA-256 of the subject string. Register a verifier without publicKey to receive a generated privateKeyPem once.',
+        summary: 'Create an agent account',
+        description: 'Returns an agentId and a one-time API key. New agents receive 1,000 credits once.',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } } },
+        responses: { '201': { description: 'Agent created' }, '400': { description: 'Invalid input', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } } },
       },
     },
-    '/attestations/{id}': { get: { summary: 'Get one attestation' } },
+    '/attestations': {
+      get: {
+        summary: 'Query attestations',
+        parameters: [
+          { name: 'type', in: 'query', schema: { type: 'string' } },
+          { name: 'subject', in: 'query', schema: { type: 'string', description: 'Case-insensitive substring match' } },
+          { name: 'subjectHash', in: 'query', schema: { type: 'string' } },
+          { name: 'verifierId', in: 'query', schema: { type: 'string' } },
+          { name: 'minConfidence', in: 'query', schema: { type: 'number' } },
+          { name: 'maxPrice', in: 'query', schema: { type: 'number' } },
+          { name: 'limit', in: 'query', schema: { type: 'number', default: 50 } },
+          { name: 'offset', in: 'query', schema: { type: 'number', default: 0 } },
+          { name: 'sortBy', in: 'query', schema: { type: 'string', enum: ['price', 'confidence', 'createdAt', 'reputation'] } },
+          { name: 'sortOrder', in: 'query', schema: { type: 'string', enum: ['asc', 'desc'] } },
+        ],
+        responses: { '200': { description: 'Attestation query results' } },
+      },
+      post: {
+        summary: 'Submit new attestation (auth required)',
+        description:
+          'Requires an ed25519 signature (base64) over the canonical payload ' +
+          '{"confidence","price","result","subjectHash","type","verifierId"} with keys sorted and no whitespace. ' +
+          'subjectHash is the lowercase hex SHA-256 of the subject string. ' +
+          'Register a verifier without publicKey to receive a generated privateKeyPem once. ' +
+          'The verifier must stake at least 10x the attestation price.',
+        security: [{ agentAuth: [], apiKey: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['type', 'subject', 'result', 'resultSummary', 'confidence', 'verifierId', 'price', 'signature'],
+                properties: {
+                  type: { type: 'string' },
+                  subject: { type: 'string' },
+                  result: { type: 'string' },
+                  resultSummary: { type: 'string', maxLength: 500 },
+                  confidence: { type: 'number' },
+                  verifierId: { type: 'string' },
+                  price: { type: 'number' },
+                  signature: { type: 'string' },
+                  royaltyPerAccess: { type: 'number' },
+                  expiresInSeconds: { type: 'number', nullable: true },
+                  metadata: { type: 'object' },
+                },
+              },
+            },
+          },
+        },
+        responses: { '201': { description: 'Attestation created' }, '400': { description: 'Invalid input or signature' } },
+      },
+    },
+    '/attestations/{id}': {
+      get: {
+        summary: 'Get one attestation',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Attestation', content: { 'application/json': { schema: { $ref: '#/components/schemas/Attestation' } } } }, '404': { description: 'Not found' } },
+      },
+    },
     '/attestations/{id}/verify': {
       get: {
         summary: 'Verify an attestation signature',
         description: 'Returns signatureValid, the verifier public key, and a reason. Legacy unsigned attestations report reason=legacy-unsigned.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Verification result' }, '404': { description: 'Not found' } },
       },
     },
-    '/attestations/{id}/purchase': { post: { summary: 'Purchase full access to an attestation (auth required)' } },
-    '/attestations/{id}/dispute': { post: { summary: 'Dispute an attestation (auth required)' } },
-    '/verifiers': {
-      get: { summary: 'List verifiers' },
-      post: { summary: 'Register a verifier (auth required); omit publicKey for a server-generated keypair' },
+    '/attestations/{id}/purchase': {
+      post: {
+        summary: 'Purchase full access to an attestation (auth required)',
+        description: 'Deducts the price from the buyer wallet, pays the verifier 90% and the marketplace 10%.',
+        security: [{ agentAuth: [], apiKey: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['buyerId'], properties: { buyerId: { type: 'string' } } } } } },
+        responses: { '200': { description: 'Purchase complete' }, '400': { description: 'Insufficient balance or invalid id' } },
+      },
     },
-    '/verifiers/{id}/stake': { post: { summary: 'Add stake to a verifier (auth required)' } },
+    '/attestations/{id}/dispute': {
+      post: {
+        summary: 'Dispute an attestation (auth required)',
+        security: [{ agentAuth: [], apiKey: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' }, evidence: { type: 'string' } } } } } },
+        responses: { '200': { description: 'Dispute filed' } },
+      },
+    },
     '/bounties': {
-      get: { summary: 'List open bounties' },
-      post: { summary: 'Post a funded bounty (auth required)' },
+      get: {
+        summary: 'List open bounties',
+        parameters: [{ name: 'type', in: 'query', schema: { type: 'string' } }],
+        responses: { '200': { description: 'Open bounties', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/Bounty' } } } } } },
+      },
+      post: {
+        summary: 'Post a funded bounty (auth required)',
+        description: 'Escrows the reward from the poster wallet. Verifiers claim and fulfill it.',
+        security: [{ agentAuth: [], apiKey: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['type', 'subject', 'reward', 'postedBy'], properties: { type: { type: 'string' }, subject: { type: 'string' }, reward: { type: 'number' }, postedBy: { type: 'string' }, expiresInSeconds: { type: 'number' } } } } } },
+        responses: { '201': { description: 'Bounty created' } },
+      },
     },
-    '/x402/info': { get: { summary: 'x402 payment configuration and gated route pricing' } },
-    '/stats': { get: { summary: 'Marketplace statistics' } },
-    '/health': { get: { summary: 'Service health' } },
+    '/bounties/{id}/claim': {
+      post: {
+        summary: 'Claim a bounty (verifier, 10x stake required)',
+        security: [{ agentAuth: [], apiKey: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['verifierId'], properties: { verifierId: { type: 'string' } } } } } },
+        responses: { '200': { description: 'Bounty claimed' } },
+      },
+    },
+    '/bounties/{id}/fulfill': {
+      post: {
+        summary: 'Fulfill a claimed bounty (signed attestation)',
+        security: [{ agentAuth: [], apiKey: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['result', 'resultSummary', 'confidence', 'signature'], properties: { result: { type: 'string' }, resultSummary: { type: 'string' }, confidence: { type: 'number' }, signature: { type: 'string' } } } } } },
+        responses: { '200': { description: 'Bounty fulfilled; attestation published' } },
+      },
+    },
+    '/bounties/{id}/cancel': {
+      post: {
+        summary: 'Cancel an open bounty (poster only)',
+        security: [{ agentAuth: [], apiKey: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['requestedBy'], properties: { requestedBy: { type: 'string' } } } } } },
+        responses: { '200': { description: 'Bounty cancelled; escrow returned' } },
+      },
+    },
+    '/verifiers': {
+      get: { summary: 'List active verifiers', responses: { '200': { description: 'Verifier list', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/Verifier' } } } } } } },
+      post: {
+        summary: 'Register a verifier (auth required)',
+        description: 'Omit publicKey to have the server generate an ed25519 keypair; the private key is returned once.',
+        security: [{ agentAuth: [], apiKey: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'endpoint', 'initialStake'], properties: { name: { type: 'string' }, endpoint: { type: 'string' }, publicKey: { type: 'string' }, initialStake: { type: 'number' } } } } } },
+        responses: { '201': { description: 'Verifier registered' } },
+      },
+    },
+    '/verifiers/{id}': {
+      get: { summary: 'Get a verifier', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Verifier' }, '404': { description: 'Not found' } } },
+    },
+    '/verifiers/{id}/attestations': {
+      get: { summary: "List a verifier's attestations", parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Attestation list' } } },
+    },
+    '/verifiers/{id}/stake': {
+      post: { summary: 'Add stake to a verifier (auth required)', security: [{ agentAuth: [], apiKey: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['amount'], properties: { amount: { type: 'number' } } } } } }, responses: { '200': { description: 'Stake added' } } },
+    },
+    '/wallets/{ownerId}': {
+      get: { summary: 'Check a wallet balance', parameters: [{ name: 'ownerId', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Wallet details' } } },
+    },
+    '/wallets/{ownerId}/deposit': {
+      post: { summary: 'Create a Lightning deposit invoice (auth required)', security: [{ agentAuth: [], apiKey: [] }], parameters: [{ name: 'ownerId', in: 'path', required: true, schema: { type: 'string' } }], requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['amount', 'memo'], properties: { amount: { type: 'number' }, memo: { type: 'string' }, ownerType: { type: 'string' } } } } } }, responses: { '200': { description: 'BOLT11 invoice' } } },
+    },
+    '/wallets/deposit/confirm': {
+      post: { summary: 'Confirm a Lightning deposit (auth required)', security: [{ agentAuth: [], apiKey: [] }], requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['paymentHash'], properties: { paymentHash: { type: 'string' } } } } } }, responses: { '200': { description: 'Deposit result' } } },
+    },
+    '/wallets/{ownerId}/withdraw': {
+      post: { summary: 'Withdraw to a Lightning invoice (auth required)', security: [{ agentAuth: [], apiKey: [] }], parameters: [{ name: 'ownerId', in: 'path', required: true, schema: { type: 'string' } }], requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['invoice', 'amount'], properties: { invoice: { type: 'string' }, amount: { type: 'number' } } } } } }, responses: { '200': { description: 'Withdrawal result' } } },
+    },
+    '/transactions': {
+      get: { summary: 'List recent transactions', parameters: [{ name: 'limit', in: 'query', schema: { type: 'number', default: 50 } }], responses: { '200': { description: 'Transaction list' } } },
+    },
+    '/transactions/{buyerId}': {
+      get: { summary: 'List a buyer\'s transactions', parameters: [{ name: 'buyerId', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Transaction list' } } },
+    },
+    '/x402/info': {
+      get: { summary: 'x402 payment configuration and gated route pricing', responses: { '200': { description: 'x402 status (never includes secrets)' } } },
+    },
+    '/stats': { get: { summary: 'Marketplace statistics', responses: { '200': { description: 'Stats' } } } },
+    '/usage': { get: { summary: 'Usage report and activity feed', responses: { '200': { description: 'Usage report' } } } },
+    '/me': { get: { summary: 'Current agent profile and wallet (auth required)', security: [{ agentAuth: [], apiKey: [] }], responses: { '200': { description: 'Agent profile' } } } },
+    '/health': { get: { summary: 'Service health', responses: { '200': { description: 'Health status' } } } },
   },
 };
 
@@ -122,6 +340,12 @@ export function createAPI(): express.Express {
   app.set('trust proxy', true);
   app.use(cors());
   app.use(express.json());
+
+  // Serve static discovery assets (e.g. /.well-known/agent.json).
+  const publicDir = path.resolve(process.cwd(), 'public');
+  if (fs.existsSync(publicDir)) {
+    app.use(express.static(publicDir));
+  }
 
   app.use((req, res, next) => {
     res.on('finish', () => {
@@ -515,13 +739,12 @@ export function createAPI(): express.Express {
     } catch (err) { res.status(400).json({ error: String(err) }); }
   });
 
-  app.post('/verifiers/:id/slash', requireAuth, async (req, res) => {
-    try { res.json(await slash(req.params.id as string, req.body.amount, req.body.reason)); } catch (err) { res.status(400).json({ error: String(err) }); }
-  });
-
-  app.post('/verifiers/:id/reputation', requireAuth, async (req, res) => {
-    try { res.json(await updateReputation(req.params.id as string, req.body.delta)); } catch (err) { res.status(400).json({ error: String(err) }); }
-  });
+  // NOTE: admin-only verifier slashing and reputation adjustment are
+  // intentionally NOT exposed over the public REST API. The previous routes
+  // only required any valid agent key, so any authenticated agent could slash
+  // or reputate any verifier. The underlying functions remain for internal
+  // use (e.g. dispute penalties) and can be re-exposed behind an admin
+  // credential later.
 
   // --- Transactions ---
 

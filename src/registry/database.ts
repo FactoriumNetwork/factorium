@@ -163,6 +163,23 @@ export async function initDatabase(): Promise<void> {
     ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payer_address TEXT;
   `);
 
+  // Migrate existing databases: one-time free-credit flag on wallets.
+  // The backfill runs only when the column is first introduced, so wallets
+  // created later still default to FALSE and can receive the signup credit.
+  const freeCreditColumn = await db.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'payment_wallets' AND column_name = 'free_credits_awarded'`
+  );
+  if (freeCreditColumn.rows.length === 0) {
+    await db.query(
+      `ALTER TABLE payment_wallets ADD COLUMN free_credits_awarded BOOLEAN NOT NULL DEFAULT FALSE`
+    );
+    // Every wallet that existed before this column was introduced has already
+    // been through the old in-memory faucet; mark them as credited so they are
+    // not paid a second time.
+    await db.query(`UPDATE payment_wallets SET free_credits_awarded = TRUE`);
+  }
+
   // Create indexes
   await db.query(`
     CREATE INDEX IF NOT EXISTS idx_attestations_type ON attestations(type);

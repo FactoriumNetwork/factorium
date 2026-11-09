@@ -472,6 +472,7 @@ tr:hover td{background:#1c2128}
 .tag-open{background:#d2992211;color:#d29922}
 .tag-claimed{background:#1f6feb11;color:#58a6ff}
 .tag-done{background:#23863611;color:#3fb950}
+.tag-demo{background:#a371f711;color:#a371f7}
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:50;justify-content:center;align-items:center}
 .modal-overlay.show{display:flex}
 .modal{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:28px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto}
@@ -696,7 +697,7 @@ function searchAttestations() {
       var html = '<table><tr><th>Type</th><th>Subject</th><th>Result</th><th>Confidence</th><th>Price</th><th></th></tr>';
       data.attestations.forEach(function(a) {
         html += '<tr>' +
-          '<td><span class="tag tag-open">' + esc(a.type) + '</span></td>' +
+          '<td><span class="tag tag-open">' + esc(a.type) + '</span>' + (a.metadata && a.metadata.demo ? ' <span class="tag tag-demo">DEMO</span>' : '') + '</td>' +
           '<td>' + esc(a.subject.slice(0, 60)) + '</td>' +
           '<td>' + esc((a.resultSummary || '').slice(0, 80)) + '</td>' +
           '<td>' + (a.confidence * 100).toFixed(0) + '%</td>' +
@@ -1028,7 +1029,7 @@ function loadMyAttestations() {
       var html = '<table><tr><th>Type</th><th>Subject</th><th>Price</th><th>Accesses</th><th>Disputed</th></tr>';
       data.forEach(function(a) {
         html += '<tr>' +
-          '<td><span class="tag tag-open">' + esc(a.type) + '</span></td>' +
+          '<td><span class="tag tag-open">' + esc(a.type) + '</span>' + (a.metadata && a.metadata.demo ? ' <span class="tag tag-demo">DEMO</span>' : '') + '</td>' +
           '<td>' + esc(a.subject.slice(0, 50)) + '</td>' +
           '<td>' + a.price + ' sats</td>' +
           '<td>' + (a.accessCount || 0) + '</td>' +

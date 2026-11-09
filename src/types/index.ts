@@ -46,15 +46,17 @@ export interface Attestation {
   metadata: Record<string, unknown>;
 }
 
+// Query params arrive as strings over REST (Express) but as numbers from MCP
+// clients. z.coerce.number() accepts both so the documented query API works.
 export const AttestationQuerySchema = z.object({
   type: AttestationTypeEnum.optional(),
   subjectHash: z.string().optional(),
   subject: z.string().optional(),
   verifierId: z.string().optional(),
-  minConfidence: z.number().min(0).max(1).optional(),
-  maxPrice: z.number().min(0).optional(),
-  limit: z.number().min(1).max(1000).optional(),
-  offset: z.number().min(0).optional(),
+  minConfidence: z.coerce.number().min(0).max(1).optional(),
+  maxPrice: z.coerce.number().min(0).optional(),
+  limit: z.coerce.number().min(1).max(1000).optional(),
+  offset: z.coerce.number().min(0).optional(),
   sortBy: z.enum(['price', 'confidence', 'createdAt', 'reputation']).optional(),
   sortOrder: z.enum(['asc', 'desc']).optional(),
 });

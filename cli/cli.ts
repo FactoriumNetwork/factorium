@@ -22,7 +22,7 @@ const program = new Command();
 program
   .name('factorium')
   .description('Factorium — Attestation Marketplace Protocol CLI')
-  .version('1.0.6');
+  .version('1.0.7');
 
 // --- Database ---
 
@@ -31,7 +31,7 @@ program
   .description('Initialize the database schema')
   .action(() => {
     getDatabase();
-    console.log('Database initialized at data/marketplace.db');
+    console.log('Database schema ensured.');
   });
 
 program

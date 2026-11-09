@@ -379,7 +379,7 @@ function createServer(): Server {
             return await wrapped((args ?? {}) as Record<string, unknown>, { _meta: request.params._meta });
           }
           const validated = AttestationQuerySchema.parse(args ?? {});
-          const result = queryAttestations(validated);
+          const result = await queryAttestations(validated);
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
         case 'buy_attestation': {
@@ -458,7 +458,7 @@ function createServer(): Server {
           return { content: [{ type: 'text', text: JSON.stringify({ message: 'Dispute filed', attestation: updated }, null, 2) }] };
         }
         case 'get_marketplace_stats': {
-          const stats = getMarketplaceStats();
+          const stats = await getMarketplaceStats();
           return { content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }] };
         }
         case 'create_deposit_invoice': {

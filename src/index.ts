@@ -15,7 +15,7 @@ switch (command) {
     console.error('Or in opencode.json / claude_desktop_config.json:');
     console.error('{');
     console.error('  "mcpServers": {');
-    console.error('    "ai2ai-marketplace": {');
+    console.error('    "factorium": {');
     console.error(`      "command": "npx",`);
     console.error(`      "args": ["tsx", "src/mcp/entry.ts"],`);
     console.error(`      "cwd": "${process.cwd()}"`);
@@ -24,7 +24,7 @@ switch (command) {
     console.error('}');
     break;
   default:
-    console.log('AI2AI Assertion Marketplace');
+    console.log('Factorium — Attestation Marketplace Protocol');
     console.log('');
     console.log('Usage:');
     console.log('  npm run api     Start the REST API server');

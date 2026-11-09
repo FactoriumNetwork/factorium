@@ -71,8 +71,8 @@ export function getTodaysFreshAttestations(): typeof dailyFacts {
   const today = new Date().toISOString().slice(0, 10);
   return dailyFacts.map((f) => ({
     ...f,
-    subject: `[${today}] ${f.subject}`,
-    resultSummary: `[${today}] ${f.resultSummary}`,
+    subject: `Demo: [${today}] ${f.subject}`,
+    resultSummary: `DEMO — [${today}] ${f.resultSummary}`,
   }));
 }
 

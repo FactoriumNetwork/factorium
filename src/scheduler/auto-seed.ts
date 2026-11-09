@@ -23,6 +23,12 @@ function normalizePem(pem: string): string {
 }
 
 export async function autoSeedDailyIfNeeded(): Promise<{ seeded: number; skipped: boolean }> {
+  // Disabled by default: the daily facts are not real verifications. Set
+  // AUTO_SEED_ENABLED=true to publish them as clearly-labeled demo data.
+  if ((process.env.AUTO_SEED_ENABLED || '').trim().toLowerCase() !== 'true') {
+    return { seeded: 0, skipped: true };
+  }
+
   const db = getDatabase();
   const today = new Date().toISOString().slice(0, 10);
 
@@ -83,7 +89,7 @@ export async function autoSeedDailyIfNeeded(): Promise<{ seeded: number; skipped
         resultSummary: fact.resultSummary, confidence: fact.confidence,
         price: fact.price, verifierId: seedVerifier.id, signature,
         royaltyPerAccess: 0, expiresInSeconds: 86400 * 7,
-        metadata: { autoSeeded: true, date: today },
+        metadata: { autoSeeded: true, demo: true, date: today },
       });
       seeded++;
       incrementSeededFactsCount();

@@ -26,7 +26,7 @@ Factorium is a native MCP server. Add this to any MCP-compatible agent:
 }
 ```
 
-12 tools available: query attestations, purchase results, submit verifications, register as verifier, post bounties, check balance, deposit, withdraw, and more.
+12 tools available: query attestations, purchase results, submit verifications, register as verifier, check reputation, dispute, check balance, deposit, withdraw, and more.
 
 ### REST API
 
