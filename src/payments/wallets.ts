@@ -93,7 +93,7 @@ export async function confirmDeposit(paymentHash: string): Promise<PaymentResult
   if (!isLightningConfigured()) {
     const metadata = JSON.parse(invRow.metadata);
     await db.query('UPDATE payment_wallets SET balance = balance + $1 WHERE owner_id = $2', [invRow.amount, metadata.ownerId]);
-    await db.query("UPDATE payment_invoices SET status = 'paid', paid_at = NOW() AT TIME ZONE 'utc' WHERE payment_hash = $1", [paymentHash]);
+    await db.query("UPDATE payment_invoices SET status = 'paid', paid_at = NOW() WHERE payment_hash = $1", [paymentHash]);
     return { success: true, transactionId: uuid(), newBalance: await getBalance(metadata.ownerId) };
   }
 
@@ -104,7 +104,7 @@ export async function confirmDeposit(paymentHash: string): Promise<PaymentResult
   const metadata = JSON.parse(invRow.metadata);
   await getOrCreateWallet(metadata.ownerId, metadata.ownerType);
   await db.query('UPDATE payment_wallets SET balance = balance + $1 WHERE owner_id = $2', [invRow.amount, metadata.ownerId]);
-  await db.query("UPDATE payment_invoices SET status = 'paid', paid_at = NOW() AT TIME ZONE 'utc' WHERE payment_hash = $1", [paymentHash]);
+  await db.query("UPDATE payment_invoices SET status = 'paid', paid_at = NOW() WHERE payment_hash = $1", [paymentHash]);
   return { success: true, transactionId: uuid(), newBalance: await getBalance(metadata.ownerId) };
 }
 

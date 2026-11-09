@@ -2,6 +2,11 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
+// Return timestamp columns as ISO strings (not Date objects) so the API
+// always serializes them as strings and callers can safely .slice() them.
+pg.types.setTypeParser(1114, (val: string) => val); // timestamp
+pg.types.setTypeParser(1184, (val: string) => new Date(val).toISOString()); // timestamptz
+
 let pool: pg.Pool | null = null;
 
 export function getDatabase(): pg.Pool {
@@ -40,7 +45,7 @@ export async function initDatabase(): Promise<void> {
       total_attestations INTEGER NOT NULL DEFAULT 0,
       successful_attestations INTEGER NOT NULL DEFAULT 0,
       disputed_attestations INTEGER NOT NULL DEFAULT 0,
-      registered_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+      registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       active INTEGER NOT NULL DEFAULT 1
     );
 
@@ -56,8 +61,8 @@ export async function initDatabase(): Promise<void> {
       verifier_signature TEXT NOT NULL,
       price REAL NOT NULL DEFAULT 0,
       royalty_per_access REAL NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
-      expires_at TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ,
       access_count INTEGER NOT NULL DEFAULT 0,
       disputed INTEGER NOT NULL DEFAULT 0,
       dispute_reason TEXT,
@@ -72,7 +77,7 @@ export async function initDatabase(): Promise<void> {
       amount REAL NOT NULL,
       action TEXT NOT NULL CHECK(action IN ('stake', 'unstake', 'slash')),
       reason TEXT NOT NULL,
-      timestamp TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+      timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       FOREIGN KEY (verifier_id) REFERENCES verifiers(id)
     );
 
@@ -84,7 +89,7 @@ export async function initDatabase(): Promise<void> {
       amount REAL NOT NULL,
       marketplace_fee REAL NOT NULL,
       verifier_payout REAL NOT NULL,
-      timestamp TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+      timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       tx_hash TEXT,
       payer_address TEXT,
       FOREIGN KEY (attestation_id) REFERENCES attestations(id),
@@ -98,7 +103,7 @@ export async function initDatabase(): Promise<void> {
       ip TEXT NOT NULL,
       user_agent TEXT,
       status_code INTEGER,
-      timestamp TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+      timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS activity_log (
@@ -106,7 +111,7 @@ export async function initDatabase(): Promise<void> {
       event TEXT NOT NULL,
       detail TEXT NOT NULL,
       actor_id TEXT,
-      timestamp TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+      timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS bounties (
@@ -119,9 +124,9 @@ export async function initDatabase(): Promise<void> {
       fulfilled_by TEXT,
       attestation_id TEXT,
       status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'claimed', 'fulfilled', 'expired', 'cancelled')),
-      created_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
-      expires_at TEXT NOT NULL,
-      claimed_at TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      claimed_at TIMESTAMPTZ,
       FOREIGN KEY (attestation_id) REFERENCES attestations(id)
     );
 
@@ -133,7 +138,7 @@ export async function initDatabase(): Promise<void> {
       lnbits_wallet_id TEXT,
       lnbits_admin_key TEXT,
       lnbits_invoice_key TEXT,
-      created_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS payment_invoices (
@@ -145,15 +150,15 @@ export async function initDatabase(): Promise<void> {
       status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'paid', 'expired', 'cancelled')),
       wallet_id TEXT NOT NULL,
       metadata TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
-      paid_at TEXT
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      paid_at TIMESTAMPTZ
     );
 
     CREATE TABLE IF NOT EXISTS api_keys (
       agent_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       api_key_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
 
@@ -178,6 +183,36 @@ export async function initDatabase(): Promise<void> {
     // been through the old in-memory faucet; mark them as credited so they are
     // not paid a second time.
     await db.query(`UPDATE payment_wallets SET free_credits_awarded = TRUE`);
+  }
+
+  // Migrate existing databases: timestamp columns were TEXT and cannot be
+  // compared with NOW() in PostgreSQL. Convert them to TIMESTAMPTZ.
+  const tsCols: Array<[string, string]> = [
+    ['verifiers', 'registered_at'],
+    ['attestations', 'created_at'],
+    ['attestations', 'expires_at'],
+    ['staking_events', 'timestamp'],
+    ['transactions', 'timestamp'],
+    ['api_requests', 'timestamp'],
+    ['activity_log', 'timestamp'],
+    ['bounties', 'created_at'],
+    ['bounties', 'expires_at'],
+    ['bounties', 'claimed_at'],
+    ['payment_wallets', 'created_at'],
+    ['payment_invoices', 'created_at'],
+    ['payment_invoices', 'paid_at'],
+    ['api_keys', 'created_at'],
+  ];
+  for (const [table, col] of tsCols) {
+    const check = await db.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_name = $1 AND column_name = $2 AND data_type <> 'timestamp with time zone'`,
+      [table, col]
+    );
+    if (check.rows.length > 0) {
+      await db.query(`ALTER TABLE ${table} ALTER COLUMN ${col} TYPE TIMESTAMPTZ USING ${col}::timestamptz`);
+      await db.query(`ALTER TABLE ${table} ALTER COLUMN ${col} SET DEFAULT NOW()`);
+    }
   }
 
   // Create indexes
@@ -205,7 +240,7 @@ export async function initDatabase(): Promise<void> {
   // Insert marketplace wallet if not exists
   await db.query(`
     INSERT INTO payment_wallets (id, owner_id, owner_type, balance, created_at)
-    VALUES ('marketplace', 'marketplace', 'marketplace', 0, NOW() AT TIME ZONE 'utc')
+    VALUES ('marketplace', 'marketplace', 'marketplace', 0, NOW())
     ON CONFLICT (owner_id) DO NOTHING
   `);
 }

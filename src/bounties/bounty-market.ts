@@ -87,7 +87,7 @@ export async function getBounty(id: string): Promise<Bounty | null> {
 
 export async function listOpenBounties(type?: AttestationType, limit = 50): Promise<Bounty[]> {
   const db = getDatabase();
-  let query = "SELECT * FROM bounties WHERE status = 'open' AND expires_at > NOW() AT TIME ZONE 'utc'";
+  let query = "SELECT * FROM bounties WHERE status = 'open' AND expires_at > NOW()";
   const params: unknown[] = [];
   let paramIdx = 1;
 
@@ -114,7 +114,7 @@ export async function claimBounty(bountyId: string, verifierId: string): Promise
   }
 
   await db.query(
-    "UPDATE bounties SET status = 'claimed', fulfilled_by = $1, claimed_at = NOW() AT TIME ZONE 'utc' WHERE id = $2",
+    "UPDATE bounties SET status = 'claimed', fulfilled_by = $1, claimed_at = NOW() WHERE id = $2",
     [verifierId, bountyId]
   );
   return (await getBounty(bountyId))!;

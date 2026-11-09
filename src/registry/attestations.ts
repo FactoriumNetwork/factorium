@@ -73,7 +73,7 @@ export async function getAttestation(id: string): Promise<Attestation | null> {
 
 export async function queryAttestations(query: AttestationQuery): Promise<QueryResult> {
   const db = getDatabase();
-  const conditions: string[] = ['disputed = 0', "(expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'utc')"];
+  const conditions: string[] = ['disputed = 0', "(expires_at IS NULL OR expires_at > NOW())"];
   const params: unknown[] = [];
   let paramIdx = 1;
 

@@ -26,21 +26,21 @@ export async function getUsageReport(): Promise<Record<string, unknown>> {
     SELECT
       COUNT(*) as total_requests,
       COUNT(DISTINCT ip) as unique_ips,
-      (SELECT COUNT(*) FROM transactions WHERE timestamp > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours') as transactions,
-      (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE timestamp > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours') as transaction_volume,
-      (SELECT COUNT(*) FROM attestations WHERE created_at > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours') as new_attestations,
-      (SELECT COUNT(*) FROM verifiers WHERE registered_at > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours') as new_verifiers
+      (SELECT COUNT(*) FROM transactions WHERE timestamp > NOW() - INTERVAL '24 hours') as transactions,
+      (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE timestamp > NOW() - INTERVAL '24 hours') as transaction_volume,
+      (SELECT COUNT(*) FROM attestations WHERE created_at > NOW() - INTERVAL '24 hours') as new_attestations,
+      (SELECT COUNT(*) FROM verifiers WHERE registered_at > NOW() - INTERVAL '24 hours') as new_verifiers
   `);
 
   const topEndpoints = await db.query(
     `SELECT path, COUNT(*) as count FROM api_requests
-     WHERE timestamp > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours'
+     WHERE timestamp > NOW() - INTERVAL '24 hours'
      GROUP BY path ORDER BY count DESC LIMIT 20`
   );
 
   const topIps = await db.query(
     `SELECT ip, COUNT(*) as count FROM api_requests
-     WHERE timestamp > NOW() AT TIME ZONE 'utc' - INTERVAL '24 hours'
+     WHERE timestamp > NOW() - INTERVAL '24 hours'
      GROUP BY ip ORDER BY count DESC LIMIT 10`
   );
 

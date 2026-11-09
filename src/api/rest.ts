@@ -342,9 +342,10 @@ export function createAPI(): express.Express {
   app.use(express.json());
 
   // Serve static discovery assets (e.g. /.well-known/agent.json).
+  // dotfiles must be 'allow' or serve-static ignores .well-known by default.
   const publicDir = path.resolve(process.cwd(), 'public');
   if (fs.existsSync(publicDir)) {
-    app.use(express.static(publicDir));
+    app.use(express.static(publicDir, { dotfiles: 'allow' }));
   }
 
   app.use((req, res, next) => {

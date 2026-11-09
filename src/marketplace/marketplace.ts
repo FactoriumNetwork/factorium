@@ -15,8 +15,8 @@ export async function getMarketplaceStats(): Promise<MarketplaceStats> {
       (SELECT COUNT(*) FROM transactions) as total_transactions,
       (SELECT COALESCE(SUM(amount), 0) FROM transactions) as total_volume,
       (SELECT COALESCE(SUM(marketplace_fee), 0) FROM transactions) as total_fees,
-      (SELECT COUNT(*) FROM attestations WHERE disputed = 0 AND (expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'utc')) as active_attestations,
-      (SELECT COALESCE(AVG(price), 0) FROM attestations WHERE disputed = 0 AND (expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'utc')) as average_price
+      (SELECT COUNT(*) FROM attestations WHERE disputed = 0 AND (expires_at IS NULL OR expires_at > NOW())) as active_attestations,
+      (SELECT COALESCE(AVG(price), 0) FROM attestations WHERE disputed = 0 AND (expires_at IS NULL OR expires_at > NOW())) as average_price
   `);
 
   const s = result.rows[0];

@@ -142,7 +142,7 @@ async function recordX402PurchaseSettlement(ctx: SettleResultContext): Promise<v
     // Ensure the verifier has a wallet row, then credit the 90% payout.
     await client.query(
       `INSERT INTO payment_wallets (id, owner_id, owner_type, balance, created_at)
-       VALUES ($1, $2, 'verifier', 0, NOW() AT TIME ZONE 'utc')
+       VALUES ($1, $2, 'verifier', 0, NOW())
        ON CONFLICT (owner_id) DO NOTHING`,
       [uuid(), attestation.verifierId]
     );
