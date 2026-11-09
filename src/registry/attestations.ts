@@ -88,18 +88,23 @@ export async function queryAttestations(query: AttestationQuery): Promise<QueryR
   if (query.maxPrice !== undefined) { conditions.push(`price <= $${paramIdx++}`); params.push(query.maxPrice); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const orderBy = query.sortBy === 'confidence' ? 'confidence DESC' :
-    query.sortBy === 'price' ? 'price ASC' :
-    query.sortBy === 'reputation' ? 'reputation_score DESC' : 'created_at DESC';
-  const order = query.sortOrder === 'asc' ? 'ASC' : 'DESC';
+  // orderBy is a complete ORDER BY clause (column + direction). Do not append
+  // a second direction — that produces invalid SQL like "ORDER BY x DESC DESC".
+  const orderBy = query.sortBy === 'confidence'
+    ? `a.confidence ${query.sortOrder === 'asc' ? 'ASC' : 'DESC'}`
+    : query.sortBy === 'price'
+      ? `a.price ${query.sortOrder === 'desc' ? 'DESC' : 'ASC'}`
+      : query.sortBy === 'reputation'
+        ? `v.reputation_score ${query.sortOrder === 'asc' ? 'ASC' : 'DESC'}`
+        : `a.created_at ${query.sortOrder === 'asc' ? 'ASC' : 'DESC'}`;
   const limit = query.limit || 50;
   const offset = query.offset || 0;
 
-  const countResult = await db.query(`SELECT COUNT(*) as count FROM attestations ${where}`, params);
+  const countResult = await db.query(`SELECT COUNT(*) as count FROM attestations a ${where}`, params);
   const total = parseInt(countResult.rows[0].count, 10);
 
   const dataResult = await db.query(
-    `SELECT a.* FROM attestations a LEFT JOIN verifiers v ON a.verifier_id = v.id ${where} ORDER BY ${orderBy} ${order} LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
+    `SELECT a.* FROM attestations a LEFT JOIN verifiers v ON a.verifier_id = v.id ${where} ORDER BY ${orderBy} LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
     [...params, limit, offset]
   );
 
