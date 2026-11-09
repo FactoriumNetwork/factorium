@@ -453,18 +453,21 @@ export function createAPI(): express.Express {
   app.post('/mcp', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     try {
-      let transport: StreamableHTTPServerTransport;
       if (sessionId && transports.has(sessionId)) {
-        transport = transports.get(sessionId)!;
-      } else if (!sessionId && isInitializeRequest(req.body)) {
-        transport = createMCPHttpTransport();
-        transport.onclose = () => { const sid = transport.sessionId; if (sid) transports.delete(sid); };
-        await createAndConnectMCPTransport(transport);
-      } else {
-        res.status(400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request' }, id: null });
+        await transports.get(sessionId)!.handleRequest(req, res, req.body);
         return;
       }
-      await transport.handleRequest(req, res, req.body);
+      if (!sessionId && isInitializeRequest(req.body)) {
+        const transport = createMCPHttpTransport();
+        transport.onclose = () => { const sid = transport.sessionId; if (sid) transports.delete(sid); };
+        await createAndConnectMCPTransport(transport);
+        await transport.handleRequest(req, res, req.body);
+        // Register the new session so follow-up requests can find it.
+        // (Without this, every post-initialize request returns 400.)
+        if (transport.sessionId) transports.set(transport.sessionId, transport);
+        return;
+      }
+      res.status(400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request' }, id: null });
     } catch {
       if (!res.headersSent) res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
     }
