@@ -134,7 +134,7 @@ export async function initDatabase(): Promise<void> {
       id TEXT PRIMARY KEY,
       owner_id TEXT NOT NULL UNIQUE,
       owner_type TEXT NOT NULL CHECK(owner_type IN ('verifier', 'buyer', 'marketplace')),
-      balance INTEGER NOT NULL DEFAULT 0,
+      balance REAL NOT NULL DEFAULT 0,
       lnbits_wallet_id TEXT,
       lnbits_admin_key TEXT,
       lnbits_invoice_key TEXT,
@@ -213,6 +213,17 @@ export async function initDatabase(): Promise<void> {
       await db.query(`ALTER TABLE ${table} ALTER COLUMN ${col} TYPE TIMESTAMPTZ USING ${col}::timestamptz`);
       await db.query(`ALTER TABLE ${table} ALTER COLUMN ${col} SET DEFAULT NOW()`);
     }
+  }
+
+  // Migrate existing databases: wallet balances must hold fractional payouts
+  // (price minus the 10% marketplace fee), so they need REAL, not INTEGER.
+  const balanceCol = await db.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'payment_wallets' AND column_name = 'balance'
+        AND data_type <> 'double precision'`
+  );
+  if (balanceCol.rows.length > 0) {
+    await db.query(`ALTER TABLE payment_wallets ALTER COLUMN balance TYPE REAL USING balance::real`);
   }
 
   // Create indexes
